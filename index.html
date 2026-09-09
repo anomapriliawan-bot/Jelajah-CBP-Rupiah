@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Shim window.fetch with both getter and setter so that scripts or sandboxes attempting
+      // to patch window.fetch do not throw 'Cannot set property fetch of #<Window> which has only a getter'
+      (function () {
+        try {
+          if (typeof window !== 'undefined') {
+            window.addEventListener(
+              'error',
+              function (event) {
+                if (
+                  event &&
+                  event.message &&
+                  typeof event.message === 'string' &&
+                  event.message.indexOf('fetch') !== -1 &&
+                  event.message.indexOf('getter') !== -1
+                ) {
+                  event.preventDefault();
+                  event.stopImmediatePropagation();
+                  return true;
+                }
+              },
+              true
+            );
+
+            var initialFetch = window.fetch;
+            var activeFetch = initialFetch;
+
+            try {
+              Object.defineProperty(window, 'fetch', {
+                get: function () {
+                  return activeFetch;
+                },
+                set: function (fn) {
+                  activeFetch = fn;
+                },
+                configurable: true,
+                enumerable: true,
+              });
+            } catch (errWindow) {
+              try {
+                var proto = Window.prototype || Object.getPrototypeOf(window);
+                if (proto) {
+                  var protoFetch = proto.fetch || initialFetch;
+                  Object.defineProperty(proto, 'fetch', {
+                    get: function () {
+                      return protoFetch;
+                    },
+                    set: function (fn) {
+                      protoFetch = fn;
+                      activeFetch = fn;
+                    },
+                    configurable: true,
+                    enumerable: true,
+                  });
+                }
+              } catch (errProto) {}
+            }
+          }
+        } catch (globalErr) {}
+      })();
+    </script>
+    <title>Jelajah CBP Rupiah - Cinta, Bangga, dan Paham Rupiah</title>
+    <meta name="description" content="Aplikasi edukasi interaktif dan gamifikasi Cinta, Bangga, dan Paham Rupiah untuk anak dan pelajar Indonesia." />
+    <meta property="og:title" content="Jelajah CBP Rupiah - Cinta, Bangga, dan Paham Rupiah" />
+    <meta property="og:description" content="Aplikasi edukasi interaktif dan gamifikasi Cinta, Bangga, dan Paham Rupiah untuk anak dan pelajar Indonesia." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Comfortaa:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
