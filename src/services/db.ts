@@ -268,6 +268,7 @@ export const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   principalName: 'I Ketut Sudarsana, S.Pd., M.Pd.',
   academicYear: '2025/2026',
   tagline: 'Edukasi Cinta, Bangga, & Paham Rupiah • Standar Bank Indonesia',
+  bypassFinalMissionRequirement: false,
 };
 
 export const GUEST_USER: User = {
@@ -5263,6 +5264,9 @@ class DatabaseService {
       currentUser?.role === 'teacher'
     );
 
+    const schoolSettings = this.getSchoolSettings();
+    const isBypassed = !!schoolSettings.bypassFinalMissionRequirement;
+
     let status: 'independent' | 'upcoming' | 'active' | 'ended' = 'independent';
     let isWithinSchedule = true;
     let message = '';
@@ -5283,15 +5287,19 @@ class DatabaseService {
       } else {
         status = 'active';
         isWithinSchedule = true;
-        message = `Sesi Main Bareng "${event.title}" sedang aktif.`;
+        message = isBypassed
+          ? `Sesi Main Bareng "${event.title}" sedang aktif (Akses langsung tanpa syarat 9 misi diaktifkan oleh Admin Sekolah).`
+          : `Sesi Main Bareng "${event.title}" sedang aktif.`;
       }
     } else {
       status = 'independent';
       isWithinSchedule = true;
-      message = 'Mode Mandiri: Siswa dapat membuka Misi Akhir setelah menuntaskan 9 Misi.';
+      message = isBypassed
+        ? 'Akses Langsung Aktif: Admin Sekolah telah mengaktifkan Misi Akhir tanpa harus menuntaskan 9 Misi.'
+        : 'Mode Mandiri: Siswa dapat membuka Misi Akhir setelah menuntaskan 9 Misi.';
     }
 
-    const canAccess = isAdminOrTeacher || (hasCompleted9Missions && (!isEventMode || isWithinSchedule));
+    const canAccess = isAdminOrTeacher || ((hasCompleted9Missions || isBypassed) && (!isEventMode || isWithinSchedule));
 
     return {
       isEventMode,
@@ -5303,15 +5311,17 @@ class DatabaseService {
       totalMissions,
       canAccess,
       message,
+      isBypassed,
     };
   }
 
   /**
    * Check whether Misi Akhir itself is unlocked.
    * Dua mekanisme akses:
-   * 1. SYARAT MUTLAK: Wajib menyelesaikan 9 misi utama (Cinta, Bangga, Paham Rupiah).
+   * 1. SYARAT MUTLAK: Wajib menyelesaikan 9 misi utama (Cinta, Bangga, Paham Rupiah),
+   *    atau dapat diaktifkan langsung oleh Admin Sekolah melalui tombol bypass.
    * 2. JADWAL MAIN BARENG: Jika Admin Sekolah mengaktifkan jadwal event, hanya terbuka pada rentang waktu tersebut.
-   *    Jika jadwal tidak aktif (mode mandiri), terbuka kapan saja setelah 9 misi tuntas.
+   *    Jika jadwal tidak aktif (mode mandiri), terbuka kapan saja setelah 9 misi tuntas (atau saat bypass aktif).
    * Catatan: Admin, Guru, dan Akun Penguji dapat melewati batasan ini untuk telaah materi.
    */
   public isFinalMissionUnlocked(studentId?: string, user?: User | null): boolean {
@@ -5336,12 +5346,15 @@ class DatabaseService {
       return true;
     }
 
+    const schoolSettings = this.getSchoolSettings();
+    const isBypassed = !!schoolSettings.bypassFinalMissionRequirement;
+
     const missions = this.getMissions();
     const totalRequired = missions && missions.length > 0 ? missions.length : 9;
     const completed = this.getCompletedMissionsCount(activeStudentId);
 
-    // Syarat 1: WAJIB tuntas 9 Misi CBP Rupiah
-    if (completed < totalRequired) {
+    // Syarat 1: WAJIB tuntas 9 Misi CBP Rupiah (dilewati jika Admin Sekolah mengaktifkan bypass)
+    if (!isBypassed && completed < totalRequired) {
       return false;
     }
 

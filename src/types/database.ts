@@ -451,6 +451,7 @@ export interface SchoolSettings {
   principalName?: string;
   academicYear?: string;
   tagline?: string;
+  bypassFinalMissionRequirement?: boolean; // Jika true, siswa dapat membuka Misi Akhir tanpa harus menuntaskan 9 misi utama
   updatedAt?: string;
   updatedBy?: string;
 }

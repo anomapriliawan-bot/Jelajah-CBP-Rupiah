@@ -827,6 +827,30 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
             </section>
           )}
 
+          {/* Akses Khusus Bypass Sekolah Banner */}
+          {!eventStatus.isEventMode && isFinalMissionUnlocked && eventStatus.isBypassed && !eventStatus.hasCompleted9Missions && (
+            <section className="bg-gradient-to-r from-blue-950/80 via-indigo-950/60 to-slate-900 border-2 border-blue-400/60 rounded-3xl p-5 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-300 shrink-0">
+                  <Sparkles className="w-6 h-6 animate-pulse" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-black text-white">
+                      Akses Khusus Sekolah Aktif
+                    </h3>
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-blue-400 text-slate-950 shadow-sm">
+                      Izin Langsung Admin Sekolah 🚀
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-200/90 mt-1">
+                    Admin Sekolah telah memberikan akses langsung ke Misi Akhir. Kamu dapat langsung memulai pengerjaan Tahap 1 tanpa harus menuntaskan 9 misi petualangan terlebih dahulu.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
           {!isFinalMissionUnlocked && (
             <section className="bg-gradient-to-r from-amber-500/20 via-amber-600/15 to-yellow-500/20 border-2 border-amber-400/60 rounded-3xl p-5 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">

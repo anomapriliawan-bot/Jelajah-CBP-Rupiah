@@ -44,6 +44,7 @@ export const FinalMissionEventManagement: React.FC<FinalMissionEventManagementPr
   const [accessConfig, setAccessConfig] = useState<FinalMissionStageAccessConfig>(() =>
     db.getFinalMissionStageAccess()
   );
+  const [schoolSettings, setSchoolSettings] = useState(() => db.getSchoolSettings());
 
   const [leaderboard, setLeaderboard] = useState<FinalMissionLeaderboardEntry[]>([]);
   const [stageFilter, setStageFilter] = useState<FinalMissionStage | 'all'>('all');
@@ -73,6 +74,7 @@ export const FinalMissionEventManagement: React.FC<FinalMissionEventManagementPr
   const loadData = () => {
     const config = db.getFinalMissionStageAccess();
     setAccessConfig(config);
+    setSchoolSettings(db.getSchoolSettings());
     const schedule = config.eventSchedule;
     if (schedule) {
       setIsEnabled(schedule.enabled);
@@ -88,6 +90,21 @@ export const FinalMissionEventManagement: React.FC<FinalMissionEventManagementPr
       schoolId: currentUser?.role !== 'superadmin' ? currentUser?.schoolId : undefined,
     });
     setLeaderboard(lb);
+  };
+
+  const handleToggleBypassRequirement = () => {
+    sounds.playPop();
+    const nextVal = !schoolSettings.bypassFinalMissionRequirement;
+    const updated = db.updateSchoolSettings({
+      bypassFinalMissionRequirement: nextVal,
+    });
+    setSchoolSettings(updated);
+    setSaveSuccessMsg(
+      nextVal
+        ? 'Akses Misi Akhir Diaktifkan Langsung: Siswa dapat membuka Misi Akhir tanpa harus menyelesaikan 9 misi terlebih dahulu.'
+        : 'Syarat 9 Misi Dipulihkan: Siswa wajib menyelesaikan 9 misi utama sebelum membuka Misi Akhir.'
+    );
+    setTimeout(() => setSaveSuccessMsg(''), 5000);
   };
 
   useEffect(() => {
@@ -356,26 +373,94 @@ export const FinalMissionEventManagement: React.FC<FinalMissionEventManagementPr
           </div>
         </div>
 
-        {/* RULE CALLOUT: Otoritas Admin Sekolah & Syarat 9 Misi */}
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3 pt-5 border-t border-slate-100 text-xs">
-          <div className="p-3 rounded-2xl bg-blue-50/70 border border-blue-100 flex items-start gap-2.5 text-blue-900">
-            <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-black text-blue-950">Kewenangan Terbatas Admin Sekolah:</span>
-              <p className="text-blue-800 mt-0.5">
-                Admin sekolah hanya mengendalikan jadwal/periode event. Butir soal dan bobot evaluasi tetap
-                terpusat di bawah kendali Admin Pusat BI.
-              </p>
+        {/* KONTROL AKSES KHUSUS ADMIN SEKOLAH: AKTIVASI MISI AKHIR TANPA 9 MISI */}
+        <div className="mt-5 pt-5 border-t border-slate-100 space-y-3">
+          <div className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+            schoolSettings.bypassFinalMissionRequirement
+              ? 'bg-emerald-50/70 border-emerald-300/80 shadow-xs'
+              : 'bg-amber-50/50 border-amber-200/80 shadow-2xs'
+          }`}>
+            <div className="flex items-start gap-3.5">
+              <div
+                className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border shadow-xs ${
+                  schoolSettings.bypassFinalMissionRequirement
+                    ? 'bg-emerald-500 text-white border-emerald-400'
+                    : 'bg-amber-100 text-amber-700 border-amber-300'
+                }`}
+              >
+                {schoolSettings.bypassFinalMissionRequirement ? (
+                  <Unlock className="w-5 h-5" />
+                ) : (
+                  <Lock className="w-5 h-5" />
+                )}
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-sm font-black text-slate-900">
+                    Aktivasi Misi Akhir Tanpa Menyelesaikan 9 Misi
+                  </h4>
+                  {schoolSettings.bypassFinalMissionRequirement ? (
+                    <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      Akses Langsung Aktif
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                      Prasyarat Normal (Wajib 9 Misi)
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+                  {schoolSettings.bypassFinalMissionRequirement
+                    ? 'Fitur aktif: Seluruh siswa di sekolah Anda dapat langsung membuka dan mengerjakan Misi Akhir tanpa harus menyelesaikan 9 misi utama (Cinta, Bangga, Paham) terlebih dahulu.'
+                    : 'Fitur nonaktif: Siswa diwajibkan menyelesaikan seluruh 9 misi petualangan sebelum sistem memperbolehkan mereka mengakses Misi Akhir.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="shrink-0 flex items-center">
+              <button
+                type="button"
+                onClick={handleToggleBypassRequirement}
+                className={`w-full md:w-auto px-5 py-2.5 rounded-2xl font-black text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  schoolSettings.bypassFinalMissionRequirement
+                    ? 'bg-slate-800 hover:bg-slate-900 text-white border border-slate-700'
+                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20'
+                }`}
+              >
+                {schoolSettings.bypassFinalMissionRequirement ? (
+                  <>
+                    <Lock className="w-4 h-4 text-rose-300" />
+                    <span>Kunci Kembali (Wajib 9 Misi)</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-4 h-4 text-slate-950" />
+                    <span>Aktifkan Misi Akhir Langsung</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
-          <div className="p-3 rounded-2xl bg-amber-50/70 border border-amber-100 flex items-start gap-2.5 text-amber-900">
-            <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-black text-amber-950">Syarat Mutlak 9 Misi:</span>
-              <p className="text-amber-800 mt-0.5">
-                Walaupun jadwal main bareng dibuka, siswa yang belum menuntaskan 9 misi (Cinta, Bangga, Paham)
-                tetap tidak dapat membuka Misi Akhir sampai menyelesaikannya.
-              </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className="p-3 rounded-2xl bg-blue-50/70 border border-blue-100 flex items-start gap-2.5 text-blue-900">
+              <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-black text-blue-950">Kewenangan Admin Sekolah:</span>
+                <p className="text-blue-800 mt-0.5">
+                  Admin sekolah berwenang membuka akses Misi Akhir secara langsung (untuk turnamen/ujian serentak sekolah) dan menjadwalkan sesi Main Bareng.
+                </p>
+              </div>
+            </div>
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-start gap-2.5 text-slate-700">
+              <Zap className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-black text-slate-900">Sinkronisasi Instan:</span>
+                <p className="text-slate-600 mt-0.5">
+                  Perubahan status tombol langsung tersinkronisasi ke portal siswa dan basis data sekolah secara real-time.
+                </p>
+              </div>
             </div>
           </div>
         </div>
