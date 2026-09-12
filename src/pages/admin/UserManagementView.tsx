@@ -28,7 +28,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { db, generateMemorableUsername, generateMemorablePassword } from '../../services/db';
-import { User, School } from '../../types';
+import { User, School, FinalMissionClassification } from '../../types';
 import {
   generateSchoolsTemplateExcel,
   generateUsersTemplateExcel,
@@ -97,6 +97,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
     nip: '',
     gender: 'male' as 'male' | 'female',
     grade: 'Kelas 5',
+    ageCategory: 'anak' as FinalMissionClassification,
     phone: '',
     email: '',
   });
@@ -266,6 +267,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
       nip: '',
       gender: 'male',
       grade: 'Kelas 5',
+      ageCategory: defaultRole === 'student' ? 'anak' : 'dewasa',
       phone: '',
       email: '',
     });
@@ -300,6 +302,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
       nip: userFormData.role !== 'student' ? userFormData.nip.trim() || undefined : undefined,
       gender: userFormData.gender,
       grade: userFormData.role === 'student' ? userFormData.grade : undefined,
+      ageCategory: userFormData.ageCategory,
       phone: userFormData.phone.trim() || undefined,
       email: userFormData.email.trim() || undefined,
     });
@@ -328,6 +331,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
       nip: u.nip || '',
       gender: u.gender === 'female' || (u.gender as any) === 'perempuan' ? 'female' : 'male',
       grade: u.grade || 'Kelas 5',
+      ageCategory: u.ageCategory || (u.role === 'student' ? 'anak' : 'dewasa'),
       phone: u.phone || '',
       email: u.email || '',
     });
@@ -359,6 +363,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
       nip: userFormData.role !== 'student' ? userFormData.nip.trim() || undefined : undefined,
       gender: userFormData.gender,
       grade: userFormData.role === 'student' ? userFormData.grade : undefined,
+      ageCategory: userFormData.ageCategory,
       phone: userFormData.phone.trim() || undefined,
       email: userFormData.email.trim() || undefined,
     });
@@ -1139,7 +1144,26 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
                             {isStudent && (
                               <div>
                                 <span className="font-bold text-slate-800">NISN: {u.nisn || '-'}</span>
-                                <div className="text-[10px] text-slate-500">{u.grade || 'Kelas 5'}</div>
+                                <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                  <span>{u.grade || 'Kelas 5'}</span>
+                                  <span className="text-slate-300">•</span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                      u.ageCategory === 'dewasa'
+                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                        : u.ageCategory === 'remaja'
+                                        ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                        : 'bg-blue-100 text-blue-800 border border-blue-200'
+                                    }`}
+                                    title="Kategori umur penentu soal Misi Akhir"
+                                  >
+                                    {u.ageCategory === 'dewasa'
+                                      ? 'Dewasa (31-55 th)'
+                                      : u.ageCategory === 'remaja'
+                                      ? 'Remaja (18-30 th)'
+                                      : 'Anak (10-17 th)'}
+                                  </span>
+                                </div>
                               </div>
                             )}
                             {isTeacher && (
@@ -1698,6 +1722,66 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
                 </div>
               </div>
 
+              {/* Kategori Umur Peserta / Siswa (Penentu Soal Misi Akhir) */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-amber-950 flex items-center gap-1.5">
+                    <span>Kategori Umur Peserta</span>
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-black text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full border border-amber-300/70">
+                    Penentu Soal Misi Akhir
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'anak' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'anak'
+                        ? 'bg-blue-600 border-blue-600 text-white font-black shadow-xs ring-2 ring-blue-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">🧒 Anak-anak</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'anak' ? 'text-blue-100' : 'text-slate-500'}`}>
+                      10 - 17 th
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'remaja' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'remaja'
+                        ? 'bg-purple-600 border-purple-600 text-white font-black shadow-xs ring-2 ring-purple-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">🧑 Remaja</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'remaja' ? 'text-purple-100' : 'text-slate-500'}`}>
+                      18 - 30 th
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'dewasa' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'dewasa'
+                        ? 'bg-emerald-600 border-emerald-600 text-white font-black shadow-xs ring-2 ring-emerald-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">💼 Dewasa</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'dewasa' ? 'text-emerald-100' : 'text-slate-500'}`}>
+                      31 - 55 th
+                    </div>
+                  </button>
+                </div>
+                <p className="text-[10px] text-amber-900/80">
+                  Kategori umur ini menentukan bank butir soal petualangan akhir (Sang Penjelajah Rupiah) yang akan dijawab oleh siswa atau pengguna.
+                </p>
+              </div>
+
               {/* Email / Telepon untuk Admin & Pengawas */}
               {(userFormData.role === 'superadmin' || userFormData.role === 'reviewer') && (
                 <div className="grid grid-cols-2 gap-3">
@@ -1937,6 +2021,66 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
                     <option value="female">Perempuan</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Kategori Umur Peserta / Siswa (Penentu Soal Misi Akhir) */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-amber-950 flex items-center gap-1.5">
+                    <span>Kategori Umur Peserta</span>
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-black text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full border border-amber-300/70">
+                    Penentu Soal Misi Akhir
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'anak' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'anak'
+                        ? 'bg-blue-600 border-blue-600 text-white font-black shadow-xs ring-2 ring-blue-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">🧒 Anak-anak</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'anak' ? 'text-blue-100' : 'text-slate-500'}`}>
+                      10 - 17 th
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'remaja' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'remaja'
+                        ? 'bg-purple-600 border-purple-600 text-white font-black shadow-xs ring-2 ring-purple-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">🧑 Remaja</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'remaja' ? 'text-purple-100' : 'text-slate-500'}`}>
+                      18 - 30 th
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserFormData((prev) => ({ ...prev, ageCategory: 'dewasa' }))}
+                    className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      userFormData.ageCategory === 'dewasa'
+                        ? 'bg-emerald-600 border-emerald-600 text-white font-black shadow-xs ring-2 ring-emerald-300'
+                        : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60 font-semibold'
+                    }`}
+                  >
+                    <div className="text-xs">💼 Dewasa</div>
+                    <div className={`text-[10px] ${userFormData.ageCategory === 'dewasa' ? 'text-emerald-100' : 'text-slate-500'}`}>
+                      31 - 55 th
+                    </div>
+                  </button>
+                </div>
+                <p className="text-[10px] text-amber-900/80">
+                  Kategori umur ini menentukan bank butir soal petualangan akhir (Sang Penjelajah Rupiah) yang akan dijawab oleh siswa atau pengguna.
+                </p>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2">

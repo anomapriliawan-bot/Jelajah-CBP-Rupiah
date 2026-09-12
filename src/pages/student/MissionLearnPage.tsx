@@ -19,6 +19,7 @@ import { db } from '../../services/db';
 import { sounds } from '../../utils/audio';
 import { compressImageFile } from '../../utils/imageCompressor';
 import { uploadDataUrlToServer, deleteImageFromServer } from '../../services/uploadService';
+import { getImageFromStore, buildLessonImageKeys } from '../../services/imageStore';
 
 interface MissionLearnPageProps {
   missionId: string;
@@ -324,6 +325,20 @@ export const MissionLearnPage: React.FC<MissionLearnPageProps> = ({
                   alt={title}
                   referrerPolicy="no-referrer"
                   className="w-full h-auto max-h-[580px] object-contain rounded-2xl transition-all"
+                  onError={(e) => {
+                    if (currentLesson && mission) {
+                      const keys = buildLessonImageKeys(
+                        currentLesson.id,
+                        mission.id,
+                        currentLesson.content_order || currentLesson.contentOrder || currentLesson.orderIndex,
+                        currentLesson.code
+                      );
+                      const fallback = getImageFromStore(keys) || getImageFromStore([mission.id, `cbr_img_${mission.id}`]);
+                      if (fallback && e.currentTarget.src !== fallback) {
+                        e.currentTarget.src = fallback;
+                      }
+                    }
+                  }}
                 />
 
                 {/* Admin Quick Overlay Actions */}

@@ -52,6 +52,7 @@ export interface User {
   gender?: 'male' | 'female' | 'laki-laki' | 'perempuan';
   role: 'student' | 'teacher' | 'admin' | 'reviewer' | 'viewer' | 'superadmin';
   grade?: string;
+  ageCategory?: FinalMissionClassification;
   classId?: string;
   school?: string;
   schoolId?: string;

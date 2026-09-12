@@ -39,6 +39,7 @@ import { WorkflowActionModal } from '../../components/admin/WorkflowActionModal'
 import { StudentPreviewModal } from '../../components/admin/StudentPreviewModal';
 import { BatchImageUploadModal } from '../../components/admin/BatchImageUploadModal';
 import { uploadDataUrlToServer, deleteImageFromServer } from '../../services/uploadService';
+import { getImageFromStore, buildLessonImageKeys, saveImageToStore } from '../../services/imageStore';
 
 export const AdminLessonsView: React.FC = () => {
   const [lessons, setLessons] = useState<Lesson[]>(
@@ -142,6 +143,10 @@ export const AdminLessonsView: React.FC = () => {
 
       const canonicalMission = normalizeMissionId(lesson.missionId);
       const cardOrder = Number(lesson.contentOrder || lesson.orderIndex || cardNumber);
+
+      // Save into memory & IndexedDB image store for cross-device & fallback retrieval
+      const lookupKeys = buildLessonImageKeys(lesson.id, canonicalMission, cardOrder, lesson.code);
+      saveImageToStore(lesson.id, res.dataUrl, [savedUrl, ...lookupKeys]);
 
       // 1. Optimistic instant state update
       setLessons((prev) =>
@@ -708,6 +713,18 @@ export const AdminLessonsView: React.FC = () => {
                                       alt={lesson.title}
                                       referrerPolicy="no-referrer"
                                       className="w-full h-full object-contain p-1"
+                                      onError={(e) => {
+                                        const keys = buildLessonImageKeys(
+                                          lesson.id,
+                                          lesson.missionId,
+                                          cardNumber,
+                                          lesson.code
+                                        );
+                                        const fallback = getImageFromStore(keys);
+                                        if (fallback && e.currentTarget.src !== fallback) {
+                                          e.currentTarget.src = fallback;
+                                        }
+                                      }}
                                     />
                                     <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                       <label className="px-3 py-1.5 bg-white text-slate-900 hover:bg-slate-100 text-xs font-bold rounded-xl shadow cursor-pointer flex items-center gap-1">

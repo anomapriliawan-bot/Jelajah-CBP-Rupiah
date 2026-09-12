@@ -77,8 +77,10 @@ import {
 } from './imageStore';
 import { deleteImageFromServer } from './uploadService';
 import { getDefaultQ38ItemImage } from '../data/q38Assets';
+import { normalizeImageUrl } from '../utils/imageHelper';
 import {
   saveCloudDoc,
+  batchSaveCloudDocs,
   deleteCloudDoc,
   getCloudCollection,
   seedCloudIfEmpty,
@@ -89,7 +91,7 @@ import {
   FirebaseSyncStatus,
   firestore,
 } from './firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, collection, getDoc } from 'firebase/firestore';
 
 const STORAGE_KEYS = {
   WORLDS: 'jr_db_worlds',
@@ -428,7 +430,12 @@ class DatabaseService {
       // Offload question imageUrl if base64 or long data string
       if (copy.imageUrl && (copy.imageUrl.startsWith('data:') || copy.imageUrl.length > 256)) {
         saveImageToStore(`fm_q_${copy.id}`, copy.imageUrl, [copy.id, copy.imageFileName || '']);
-        delete copy.imageUrl;
+        if (copy.imageFileName) {
+          const cleanName = copy.imageFileName.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
+          copy.imageUrl = `/images/final-mission/${cleanName}`;
+        } else {
+          delete copy.imageUrl;
+        }
       }
 
       // Offload matrix items imageUrl if base64 or long data string
@@ -440,7 +447,12 @@ class DatabaseService {
               `fm_item_${itmCopy.id}`,
               itmCopy.imageFileName || '',
             ]);
-            delete itmCopy.imageUrl;
+            if (itmCopy.imageFileName) {
+              const cleanName = itmCopy.imageFileName.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
+              itmCopy.imageUrl = `/images/final-mission/${cleanName}`;
+            } else {
+              delete itmCopy.imageUrl;
+            }
           }
           return itmCopy;
         });
@@ -451,7 +463,7 @@ class DatabaseService {
   }
 
   /**
-   * Offload large lesson images to ImageStore (IndexedDB) so localStorage does not hit 5MB quota.
+   * Offload large lesson images to ImageStore (IndexedDB) and Cloud so localStorage does not hit 5MB quota.
    */
   private sanitizeLessonsForStorage(lessons: Lesson[]): Lesson[] {
     return lessons.map((l) => {
@@ -462,8 +474,28 @@ class DatabaseService {
         const mission = normalizeMissionId(copy.missionId || copy.mission_id);
         const keys = buildLessonImageKeys(copy.id, mission, order, copy.code);
         saveImageToStore(copy.id, rawImg, keys);
-        copy.imageUrl = '';
-        copy.image_url = '';
+
+        // If rawImg is a server URL or http URL, preserve it!
+        if (rawImg.startsWith('/images/') || rawImg.startsWith('http://') || rawImg.startsWith('https://')) {
+          copy.imageUrl = rawImg;
+          copy.image_url = rawImg;
+        } else {
+          // Backup dataUrl to Firestore uploaded_images collection for cross-device sharing
+          try {
+            const cleanKey = `lesson_${String(copy.id || copy.code).replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
+            saveCloudDoc('uploaded_images', cleanKey, {
+              id: cleanKey,
+              lessonId: copy.id,
+              dataUrl: rawImg && rawImg.length < 850000 ? rawImg : '',
+              category: 'lessons',
+              createdAt: new Date().toISOString(),
+            }).catch(() => {});
+          } catch {
+            // ignore
+          }
+          copy.imageUrl = '';
+          copy.image_url = '';
+        }
       }
       return copy as Lesson;
     });
@@ -575,6 +607,57 @@ class DatabaseService {
     try {
       if (key === STORAGE_KEYS.SCHOOL_SETTINGS) {
         saveCloudDoc('settings', 'school_settings', data).catch(() => {});
+      } else if (key === STORAGE_KEYS.MISSIONS && Array.isArray(data)) {
+        data.forEach((m: any) => {
+          if (m && (m.id || m.code)) {
+            const canonical = normalizeMissionId(m.id || m.code);
+            saveCloudDoc('missions', canonical, {
+              ...m,
+              id: canonical,
+              code: canonical,
+              _updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+          }
+        });
+      } else if (key === STORAGE_KEYS.LESSONS && Array.isArray(data)) {
+        data.forEach((l: any) => {
+          if (l && (l.id || l.code)) {
+            const docId = String(l.id || l.code).replace(/[^a-zA-Z0-9_-]/g, '_');
+            saveCloudDoc('lessons', docId, {
+              ...l,
+              id: l.id || l.code,
+              _updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+          }
+        });
+      } else if (key === STORAGE_KEYS.ACTIVITIES && Array.isArray(data)) {
+        data.forEach((a: any) => {
+          if (a && (a.id || a.code)) {
+            const docId = String(a.id || a.code).replace(/[^a-zA-Z0-9_-]/g, '_');
+            saveCloudDoc('activities', docId, { ...a, _updatedAt: new Date().toISOString() }).catch(() => {});
+          }
+        });
+      } else if (key === STORAGE_KEYS.PRACTICE_QUESTIONS && Array.isArray(data)) {
+        data.forEach((q: any) => {
+          if (q && (q.id || q.code)) {
+            const docId = String(q.id || q.code).replace(/[^a-zA-Z0-9_-]/g, '_');
+            saveCloudDoc('practice_questions', docId, { ...q, _updatedAt: new Date().toISOString() }).catch(() => {});
+          }
+        });
+      } else if (key === STORAGE_KEYS.BADGES && Array.isArray(data)) {
+        data.forEach((b: any) => {
+          if (b && b.id) {
+            const docId = String(b.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+            saveCloudDoc('badges', docId, { ...b, _updatedAt: new Date().toISOString() }).catch(() => {});
+          }
+        });
+      } else if (key === STORAGE_KEYS.REFLECTIONS && Array.isArray(data)) {
+        data.forEach((r: any) => {
+          if (r && (r.id || r.missionId)) {
+            const docId = String(r.id || r.missionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+            saveCloudDoc('reflections', docId, { ...r, _updatedAt: new Date().toISOString() }).catch(() => {});
+          }
+        });
       } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
         data.forEach((u: any) => {
           if (u && u.id) saveCloudDoc('users', u.id, u).catch(() => {});
@@ -591,6 +674,8 @@ class DatabaseService {
             saveCloudDoc('final_mission_progress', `${fmp.userId}_${fmp.classification}`, fmp).catch(() => {});
           }
         });
+      } else if (key === STORAGE_KEYS.FINAL_MISSION_QUESTIONS && Array.isArray(data)) {
+        this.pushFinalMissionQuestionsToCloud(data);
       } else if (key === STORAGE_KEYS.CLASSES && Array.isArray(data)) {
         data.forEach((c: any) => {
           if (c && c.id) saveCloudDoc('classes', c.id, c).catch(() => {});
@@ -610,6 +695,56 @@ class DatabaseService {
     setTimeout(async () => {
       try {
         await initFirebaseAuth();
+
+        // 0. Real-time listener for System Default Master (Cross-Device Default Misi Sync)
+        try {
+          const sysDefaultDocRef = doc(firestore, 'settings', 'system_default');
+          onSnapshot(sysDefaultDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+              const cloudMaster = snapshot.data() as any;
+              if (cloudMaster && cloudMaster.missions && Array.isArray(cloudMaster.missions) && cloudMaster.missions.length > 0) {
+                const localMasterRaw = localStorage.getItem('jr_db_custom_default_master');
+                const localMaster = localMasterRaw ? JSON.parse(localMasterRaw) : null;
+                const cloudUpdated = cloudMaster.updatedAt || '';
+                const localUpdated = localMaster?.updatedAt || '';
+
+                if (!localMaster || cloudUpdated !== localUpdated) {
+                  console.log('[Firebase] Detected newer System Default Master from Cloud, applying to system...');
+                  localStorage.setItem('jr_db_custom_default_master', JSON.stringify(cloudMaster));
+
+                  this.isCloudSyncing = true;
+                  const sortedMissions = [...cloudMaster.missions].sort((a: any, b: any) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                  this.setStorage(STORAGE_KEYS.MISSIONS, sortedMissions);
+                  if (cloudMaster.lessons && Array.isArray(cloudMaster.lessons) && cloudMaster.lessons.length > 0) {
+                    this.setStorage(STORAGE_KEYS.LESSONS, cloudMaster.lessons);
+                  }
+                  if (cloudMaster.activities && Array.isArray(cloudMaster.activities) && cloudMaster.activities.length > 0) {
+                    this.setStorage(STORAGE_KEYS.ACTIVITIES, cloudMaster.activities);
+                  }
+                  if (cloudMaster.practiceQuestions && Array.isArray(cloudMaster.practiceQuestions) && cloudMaster.practiceQuestions.length > 0) {
+                    this.setStorage(STORAGE_KEYS.PRACTICE_QUESTIONS, cloudMaster.practiceQuestions);
+                  }
+                  if (cloudMaster.badges && Array.isArray(cloudMaster.badges) && cloudMaster.badges.length > 0) {
+                    this.setStorage(STORAGE_KEYS.BADGES, cloudMaster.badges);
+                  }
+                  if (cloudMaster.reflections && Array.isArray(cloudMaster.reflections) && cloudMaster.reflections.length > 0) {
+                    this.setStorage(STORAGE_KEYS.REFLECTIONS, cloudMaster.reflections);
+                  }
+                  this.isCloudSyncing = false;
+                  this.notify();
+                }
+              }
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] System default master listener notice:', err?.message || err);
+            }
+          });
+        } catch (sysErr: any) {
+          if (sysErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Setup system_default listener notice:', sysErr);
+          }
+        }
 
         // 1. Real-time listener for School Settings
         try {
@@ -641,7 +776,140 @@ class DatabaseService {
           }
         }
 
-        // 2. Sync Users from Cloud
+        // 2. Real-time listener for Missions (syncs changes and new covers across devices)
+        try {
+          const missionsCollRef = collection(firestore, 'missions');
+          onSnapshot(missionsCollRef, (snapshot) => {
+            if (!snapshot.empty) {
+              const cloudMissions: Mission[] = [];
+              snapshot.forEach((d) => {
+                cloudMissions.push(d.data() as Mission);
+              });
+              if (cloudMissions.length > 0) {
+                // Cloud missions is the authoritative source across devices!
+                const sortedCloud = cloudMissions.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                this.isCloudSyncing = true;
+                this.setStorage(STORAGE_KEYS.MISSIONS, sortedCloud);
+                this.isCloudSyncing = false;
+                this.notify();
+              }
+            } else {
+              const isInit = localStorage.getItem(STORAGE_KEYS.INITIALIZED);
+              if (isInit) {
+                const initialMissions = this.getStorage<Mission>(STORAGE_KEYS.MISSIONS, seedMissions);
+                seedCloudIfEmpty('missions', initialMissions, 'id');
+              }
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Missions listener notice:', err?.message || err);
+            }
+          });
+        } catch (mErr: any) {
+          if (mErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Missions snapshot notice:', mErr);
+          }
+        }
+
+        // 3. Real-time listener for Lessons (syncs lesson texts and images across devices)
+        try {
+          const lessonsCollRef = collection(firestore, 'lessons');
+          onSnapshot(lessonsCollRef, (snapshot) => {
+            if (!snapshot.empty) {
+              const cloudLessons: Lesson[] = [];
+              snapshot.forEach((d) => {
+                cloudLessons.push(d.data() as Lesson);
+              });
+              if (cloudLessons.length > 0) {
+                const localLessons = this.getStorage<Lesson>(STORAGE_KEYS.LESSONS, []);
+                const lessonMap = new Map<string, Lesson>();
+                localLessons.forEach((l) => lessonMap.set(l.id || l.code, l));
+                cloudLessons.forEach((cl) => {
+                  const key = cl.id || cl.code;
+                  const existing = lessonMap.get(key);
+                  lessonMap.set(key, existing ? { ...existing, ...cl } : cl);
+                });
+                this.isCloudSyncing = true;
+                this.setStorage(STORAGE_KEYS.LESSONS, Array.from(lessonMap.values()));
+                this.isCloudSyncing = false;
+                this.notify();
+              }
+            } else {
+              const initialLessons = this.getStorage<Lesson>(STORAGE_KEYS.LESSONS, seedLessons);
+              seedCloudIfEmpty('lessons', initialLessons, 'id');
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Lessons listener notice:', err?.message || err);
+            }
+          });
+        } catch (lErr: any) {
+          if (lErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Lessons snapshot notice:', lErr);
+          }
+        }
+
+        // 4. Real-time listener for Uploaded Images (syncs uploaded pictures to local cache)
+        try {
+          const uploadedImagesCollRef = collection(firestore, 'uploaded_images');
+          onSnapshot(uploadedImagesCollRef, (snapshot) => {
+            if (!snapshot.empty) {
+              snapshot.forEach((d) => {
+                const img = d.data() as any;
+                if (img && img.dataUrl) {
+                  const id = img.id || d.id;
+                  const aliases = [
+                    img.url,
+                    img.fileName,
+                    img.lessonId,
+                    img.missionId,
+                    img.questionId,
+                    img.questionId ? `fm_q_${img.questionId}` : '',
+                    img.matrixItemId ? `fm_item_${img.matrixItemId}` : '',
+                    img.matrixItemId && img.questionId ? `fm_item_${img.questionId}_${img.matrixItemId}` : '',
+                  ].filter(Boolean);
+                  saveImageToStore(id, img.dataUrl, aliases);
+                }
+              });
+              this.notify();
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Uploaded images listener notice:', err?.message || err);
+            }
+          });
+        } catch (imgErr: any) {
+          if (imgErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Uploaded images snapshot notice:', imgErr);
+          }
+        }
+
+        // 4b. Real-time listener for Final Mission Master Questions & Images from Cloud
+        try {
+          const fmDocRef = doc(firestore, 'settings', 'final_mission_master');
+          onSnapshot(fmDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+              const cloudMaster = snapshot.data() as any;
+              if (cloudMaster && Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
+                console.log(`[Firebase] Terdeteksi pembaruan Misi Akhir dari Cloud (${cloudMaster.questions.length} butir soal). Menyinkronkan cache lokal...`);
+                this.isCloudSyncing = true;
+                this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, cloudMaster.questions);
+                this.isCloudSyncing = false;
+                this.notify();
+              }
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Final mission master listener notice:', err?.message || err);
+            }
+          });
+        } catch (fmErr: any) {
+          if (fmErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Final mission master snapshot notice:', fmErr);
+          }
+        }
+
+        // 5. Sync Users from Cloud
         const cloudUsers = await getCloudCollection<User>('users');
         if (cloudUsers && cloudUsers.length > 0) {
           const localUsers = this.getStorage<User>(STORAGE_KEYS.USERS, []);
@@ -662,7 +930,7 @@ class DatabaseService {
           seedCloudIfEmpty('users', initialUsers, 'id');
         }
 
-        // 3. Seed schools and classes to cloud if empty
+        // 6. Seed schools and classes to cloud if empty
         const schools = this.getStorage<School>(STORAGE_KEYS.SCHOOLS, seedSchools);
         seedCloudIfEmpty('schools', schools, 'id');
 
@@ -712,6 +980,25 @@ class DatabaseService {
       })
       .catch(() => {});
 
+    // 2b. Check server disk for permanently saved Final Mission questions (multi-device & multi-account sync)
+    if (typeof window !== 'undefined') {
+      fetch('/api/final-mission-questions')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((diskData) => {
+          if (diskData && Array.isArray(diskData.questions) && diskData.questions.length > 0) {
+            const current = this.inMemoryStore.get(STORAGE_KEYS.FINAL_MISSION_QUESTIONS) as FinalMissionQuestion[] | undefined;
+            // Apply if currently empty, or if disk questions contain image references or are more up-to-date
+            if (!current || current.length === 0 || diskData.questions.some((q: any) => q.imageUrl || q.imageFileName)) {
+              this.isCloudSyncing = true;
+              this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, diskData.questions);
+              this.isCloudSyncing = false;
+              this.notify();
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
     // 3. Purge any dummy simulation attempts or sample students from previous test sessions
     try {
       const storedAttempts = this.getStorage<FinalMissionAttempt>(STORAGE_KEYS.FINAL_MISSION_ATTEMPTS, []);
@@ -738,7 +1025,9 @@ class DatabaseService {
     const isCleanProductionReady = localStorage.getItem('jelajah_rupiah_clean_v1');
 
     if (!isInit) {
+      this.isCloudSyncing = true;
       this.resetToCanonicalSeed();
+      this.isCloudSyncing = false;
       localStorage.setItem('jelajah_rupiah_clean_v1', 'true');
     } else if (!isCleanProductionReady) {
       // Production cleanup: retain only superadmin (kepsek / dwija), clear dummy schools, classes, members, progress & tournaments
@@ -1073,13 +1362,32 @@ class DatabaseService {
     }
 
     const deduplicatedMap = new Map<string, Mission>();
+    const rawLessons = this.getStorage<any>(STORAGE_KEYS.LESSONS, []);
+
     list.forEach((m) => {
       const canonical = normalizeMissionId(m.id || m.code);
+      const storedImage = getImageFromStore([canonical, `cbr_img_${canonical}`, m.code, m.id]);
+      const explicitImage = (m.imageUrl || (m as any).openingImageUrl || '').trim();
+      let imageUrl = normalizeImageUrl(explicitImage !== '' ? explicitImage : storedImage);
+
+      // Fallback: If mission cover image is empty, borrow the cover from its first lesson
+      if (!imageUrl && rawLessons && rawLessons.length > 0) {
+        const matchingLesson = rawLessons.find(
+          (l: any) =>
+            normalizeMissionId(l.mission_id || l.missionId) === canonical &&
+            (l.image_url || l.imageUrl)
+        );
+        if (matchingLesson) {
+          imageUrl = normalizeImageUrl(matchingLesson.image_url || matchingLesson.imageUrl);
+        }
+      }
+
       if (!deduplicatedMap.has(canonical)) {
         deduplicatedMap.set(canonical, {
           ...m,
           id: canonical,
           code: canonical,
+          imageUrl,
           orderIndex: m.orderIndex || m.levelNumber || 1,
           levelNumber: m.levelNumber || m.orderIndex || 1,
         });
@@ -1090,6 +1398,7 @@ class DatabaseService {
           ...m,
           id: existing.id,
           code: existing.code,
+          imageUrl: imageUrl || existing.imageUrl,
           orderIndex: m.orderIndex || existing.orderIndex,
           levelNumber: m.levelNumber || existing.levelNumber,
         });
@@ -1539,6 +1848,7 @@ class DatabaseService {
       gender: userData.gender || 'male',
       role,
       grade: userData.grade || (role === 'student' ? 'Kelas 5' : undefined),
+      ageCategory: userData.ageCategory || (role === 'student' ? 'anak' : 'dewasa'),
       school: schoolName,
       schoolId: userData.schoolId,
       institution: userData.institution || institutionName,
@@ -1654,6 +1964,7 @@ class DatabaseService {
       phone?: string;
       email?: string;
       className?: string;
+      ageCategory?: string;
     }>,
     defaultSchool?: string,
     defaultRole: string = 'student'
@@ -1688,6 +1999,16 @@ class DatabaseService {
         parsedGender = 'female';
       }
 
+      let parsedAgeCategory: FinalMissionClassification | undefined;
+      const rawAge = (row.ageCategory || '').toLowerCase();
+      if (rawAge.includes('dewasa') || rawAge.includes('31') || rawAge.includes('55')) {
+        parsedAgeCategory = 'dewasa';
+      } else if (rawAge.includes('remaja') || rawAge.includes('18') || rawAge.includes('30')) {
+        parsedAgeCategory = 'remaja';
+      } else if (rawAge.includes('anak') || rawAge.includes('10') || rawAge.includes('17')) {
+        parsedAgeCategory = 'anak';
+      }
+
       const users = this.getUsers();
       // Match existing by username, nisn, nip, or (name + school)
       const existingUser = users.find((u) => {
@@ -1704,6 +2025,7 @@ class DatabaseService {
           gender: parsedGender,
           role: (role === 'admin' || role === 'teacher' || role === 'student') ? role : existingUser.role,
           grade: row.grade || existingUser.grade,
+          ageCategory: parsedAgeCategory || existingUser.ageCategory,
           school: cleanSchool || existingUser.school,
           password: (row.password || '').toString().trim() || existingUser.password || generateMemorablePassword(),
           phone: row.phone || existingUser.phone,
@@ -1730,6 +2052,7 @@ class DatabaseService {
           nip: cleanNip || (role === 'teacher' || role === 'admin' ? `19${Math.floor(100000000000 + Math.random() * 900000000000)}` : undefined),
           gender: parsedGender,
           grade: row.grade || (role === 'student' ? 'Kelas 5' : undefined),
+          ageCategory: parsedAgeCategory || (role === 'student' ? 'anak' : 'dewasa'),
           school: cleanSchool,
           phone: row.phone,
           email: row.email,
@@ -2164,6 +2487,7 @@ class DatabaseService {
       gender: studentData.gender || 'male',
       role: 'student',
       grade: studentData.grade || 'Kelas 5',
+      ageCategory: studentData.ageCategory || 'anak',
       school: studentData.school || schoolSettings.schoolName || 'SD Negeri 2 Medewi',
       points: studentData.points ?? 0,
       level: studentData.level ?? 1,
@@ -3668,15 +3992,28 @@ class DatabaseService {
   }
 
   public deleteMission(id: string): boolean {
+    const canonical = normalizeMissionId(id);
     const list = this.getMissions();
-    const filtered = list.filter((m) => m.id !== id && m.code !== id);
+    const filtered = list.filter((m) => {
+      const mCanonical = normalizeMissionId(m.id || m.code);
+      return m.id !== id && m.code !== id && mCanonical !== canonical;
+    });
     if (filtered.length === list.length) return false;
     this.setStorage(STORAGE_KEYS.MISSIONS, filtered);
     this.notify();
+
+    // Remove from Firestore
+    try {
+      deleteCloudDoc('missions', canonical).catch(() => {});
+      if (id !== canonical) deleteCloudDoc('missions', id).catch(() => {});
+    } catch {
+      // ignore
+    }
     return true;
   }
 
   public deleteAllMissions(clearAllContent: boolean = true): boolean {
+    const current = this.getMissions();
     this.setStorage(STORAGE_KEYS.MISSIONS, []);
     if (clearAllContent) {
       this.setStorage(STORAGE_KEYS.LESSONS, []);
@@ -3687,7 +4024,320 @@ class DatabaseService {
       this.setStorage(STORAGE_KEYS.BADGES, []);
     }
     this.notify();
+
+    try {
+      current.forEach((m) => {
+        const canonical = normalizeMissionId(m.id || m.code);
+        deleteCloudDoc('missions', canonical).catch(() => {});
+      });
+    } catch {
+      // ignore
+    }
     return true;
+  }
+
+  /**
+   * Permanently saves current mission set & curriculum master as System Default
+   * to both local browser storage, backend server, and Firebase Firestore (settings/system_default + missions collection).
+   */
+  public async persistSystemDefaultMaster(
+    author: string = 'Admin Kurikulum BI'
+  ): Promise<{
+    success: boolean;
+    missionsCount: number;
+    lessonsCount?: number;
+    cloudSynced: boolean;
+    serverDiskSaved?: boolean;
+  }> {
+    const currentMissions = this.getMissions();
+    const currentLessons = this.getLessons();
+    const currentActivities = this.getActivities();
+    const currentPractice = this.getPracticeQuestions();
+    const currentBadges = this.getBadges();
+    const currentReflections = this.getReflections();
+    const currentReferences = this.getReferences();
+    const currentTournamentPkgs = this.getTournamentPackages();
+    const currentTournamentQuestions = this.getTournamentQuestions();
+    const currentTournamentEvents = this.getTournamentEvents();
+    const currentFinalMissionQuestions = this.getFinalMissionQuestions();
+
+    const payload = {
+      id: 'system_default',
+      updatedAt: new Date().toISOString(),
+      updatedBy: author,
+      version: Date.now(),
+      missions: currentMissions,
+      lessons: currentLessons,
+      activities: currentActivities,
+      practiceQuestions: currentPractice,
+      badges: currentBadges,
+      reflections: currentReflections,
+      references: currentReferences,
+      tournamentPackages: currentTournamentPkgs,
+      tournamentQuestions: currentTournamentQuestions,
+      tournamentEvents: currentTournamentEvents,
+      finalMissionQuestions: currentFinalMissionQuestions,
+    };
+
+    // 1. Simpan ke local browser storage untuk cache instan
+    try {
+      localStorage.setItem('jr_db_custom_default_master', JSON.stringify(payload));
+    } catch (e) {
+      console.warn('[DB] Failed saving custom default to localStorage:', e);
+    }
+
+    // 2. Kirim ke backend server agar tersimpan di disk server secara permanen
+    let serverDiskSaved = false;
+    try {
+      const serverRes = await Promise.race([
+        fetch('/api/set-system-default', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }),
+        new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('Server write timeout')), 5000)),
+      ]);
+      if (serverRes && serverRes.ok) {
+        serverDiskSaved = true;
+        console.log('[DB] Sukses simpan default sistem ke disk server.');
+      }
+    } catch (e) {
+      console.warn('[DB] Server disk persistence error:', e);
+    }
+
+    // 3. Simpan ke Firebase Firestore secara cepat menggunakan atomic batches
+    let cloudSynced = false;
+    try {
+      await Promise.race([
+        (async () => {
+          // a. Simpan ringkasan master ke settings/system_default (ringan tanpa blob)
+          const summaryPayload = {
+            id: 'system_default',
+            updatedAt: new Date().toISOString(),
+            updatedBy: author,
+            version: Date.now(),
+            missionsCount: currentMissions.length,
+            lessonsCount: currentLessons.length,
+            badgesCount: currentBadges.length,
+            serverDiskSaved,
+          };
+          await saveCloudDoc('settings', 'system_default', summaryPayload);
+
+          // b. Simpan semua misi secara batch atomic (1 request cepat)
+          const missionDocs = currentMissions.map((m) => {
+            const canonical = normalizeMissionId(m.id || m.code);
+            return {
+              ...m,
+              id: canonical,
+              code: canonical,
+              _updatedAt: new Date().toISOString(),
+            };
+          });
+          await batchSaveCloudDocs('missions', missionDocs);
+
+          // c. Simpan semua materi (lessons) secara batch atomic
+          const lessonDocs = currentLessons
+            .filter((l) => l && (l.id || l.code))
+            .map((l) => {
+              const docId = String(l.id || l.code).replace(/[^a-zA-Z0-9_-]/g, '_');
+              return {
+                ...l,
+                id: docId,
+                _updatedAt: new Date().toISOString(),
+              };
+            });
+          if (lessonDocs.length > 0) {
+            await batchSaveCloudDocs('lessons', lessonDocs);
+          }
+
+          // d. Simpan master Misi Akhir ke settings/final_mission_master
+          if (currentFinalMissionQuestions && currentFinalMissionQuestions.length > 0) {
+            await saveCloudDoc('settings', 'final_mission_master', {
+              id: 'final_mission_master',
+              updatedAt: new Date().toISOString(),
+              updatedBy: author,
+              questionsCount: currentFinalMissionQuestions.length,
+              questions: currentFinalMissionQuestions,
+            }).catch(() => {});
+          }
+
+          cloudSynced = true;
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cloud timeout (6 detik)')), 6000)),
+      ]);
+    } catch (err) {
+      console.warn('[DB] Cloud sync for system default encountered error or timeout:', err);
+    }
+
+    this.notify();
+    return {
+      success: true,
+      missionsCount: currentMissions.length,
+      lessonsCount: currentLessons.length,
+      cloudSynced,
+      serverDiskSaved,
+    };
+  }
+
+  /**
+   * Pushes Final Mission questions and image metadata to Cloud Firestore & Server Disk
+   */
+  public async pushFinalMissionQuestionsToCloud(questions: FinalMissionQuestion[]): Promise<boolean> {
+    if (!questions || !Array.isArray(questions) || questions.length === 0) return false;
+    try {
+      // 1. Post to backend server disk
+      fetch('/api/final-mission-questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questions,
+          updatedAt: new Date().toISOString(),
+          author: 'Super Admin',
+        }),
+      }).catch((e) => console.warn('[DB] Server disk final mission push notice:', e));
+
+      // 2. Save master doc in Firestore
+      const masterDoc = {
+        id: 'final_mission_master',
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'Super Admin',
+        questionsCount: questions.length,
+        questions: questions,
+      };
+      saveCloudDoc('settings', 'final_mission_master', masterDoc).catch((e) => {
+        console.warn('[Firebase] push final_mission_master notice:', e);
+      });
+
+      return true;
+    } catch (err) {
+      console.warn('[DB] pushFinalMissionQuestionsToCloud error:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Permanently save Final Mission bank (questions + uploaded images) to Server Disk & Cloud Firestore
+   * to guarantee 100% cross-device, cross-account availability.
+   */
+  public async persistFinalMissionMaster(
+    author: string = 'Super Admin'
+  ): Promise<{
+    success: boolean;
+    questionsCount: number;
+    cloudSynced: boolean;
+    serverDiskSaved: boolean;
+  }> {
+    const currentQuestions = this.getFinalMissionQuestions();
+    let serverDiskSaved = false;
+    let cloudSynced = false;
+
+    // 1. Simpan ke backend server disk (/api/final-mission-questions)
+    try {
+      const serverRes = await Promise.race([
+        fetch('/api/final-mission-questions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            author,
+            updatedAt: new Date().toISOString(),
+            questions: currentQuestions,
+          }),
+        }),
+        new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('Server write timeout')), 5000)),
+      ]);
+      if (serverRes && serverRes.ok) {
+        serverDiskSaved = true;
+        console.log(`[DB] Berhasil menyimpan ${currentQuestions.length} butir soal Misi Akhir ke disk server.`);
+      }
+    } catch (e) {
+      console.warn('[DB] Server disk persistence for final mission error:', e);
+    }
+
+    // 2. Simpan ke Cloud Firestore (settings/final_mission_master)
+    try {
+      await Promise.race([
+        saveCloudDoc('settings', 'final_mission_master', {
+          id: 'final_mission_master',
+          updatedAt: new Date().toISOString(),
+          updatedBy: author,
+          questionsCount: currentQuestions.length,
+          questions: currentQuestions,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cloud timeout (6 detik)')), 6000)),
+      ]);
+      cloudSynced = true;
+      console.log(`[DB] Berhasil menyinkronkan ${currentQuestions.length} butir soal Misi Akhir ke Cloud Firestore.`);
+    } catch (e) {
+      console.warn('[DB] Firestore cloud sync for final mission master error:', e);
+    }
+
+    this.notify();
+    return {
+      success: serverDiskSaved || cloudSynced,
+      questionsCount: currentQuestions.length,
+      cloudSynced,
+      serverDiskSaved,
+    };
+  }
+
+  /**
+   * Manually pulls the latest System Default Master from Firebase Firestore
+   * to ensure full multi-device synchronization.
+   */
+  public async pullSystemDefaultFromCloud(): Promise<{ success: boolean; message: string; missionsCount: number }> {
+    try {
+      await initFirebaseAuth();
+      const docRef = doc(firestore, 'settings', 'system_default');
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const cloudMaster = snap.data() as any;
+        if (cloudMaster && cloudMaster.missions && Array.isArray(cloudMaster.missions) && cloudMaster.missions.length > 0) {
+          localStorage.setItem('jr_db_custom_default_master', JSON.stringify(cloudMaster));
+          this.isCloudSyncing = true;
+          const sorted = [...cloudMaster.missions].sort((a: any, b: any) => (a.orderIndex || 0) - (b.orderIndex || 0));
+          this.setStorage(STORAGE_KEYS.MISSIONS, sorted);
+          if (cloudMaster.lessons) this.setStorage(STORAGE_KEYS.LESSONS, cloudMaster.lessons);
+          if (cloudMaster.activities) this.setStorage(STORAGE_KEYS.ACTIVITIES, cloudMaster.activities);
+          if (cloudMaster.practiceQuestions) this.setStorage(STORAGE_KEYS.PRACTICE_QUESTIONS, cloudMaster.practiceQuestions);
+          if (cloudMaster.badges) this.setStorage(STORAGE_KEYS.BADGES, cloudMaster.badges);
+          if (cloudMaster.reflections) this.setStorage(STORAGE_KEYS.REFLECTIONS, cloudMaster.reflections);
+          this.isCloudSyncing = false;
+          this.notify();
+          return {
+            success: true,
+            message: `Berhasil menarik ${cloudMaster.missions.length} misi dari Cloud Firestore!`,
+            missionsCount: cloudMaster.missions.length,
+          };
+        }
+      }
+
+      // If no system_default document yet, try pulling from 'missions' collection
+      const cloudMissions = await getCloudCollection<Mission>('missions');
+      if (cloudMissions && cloudMissions.length > 0) {
+        const sorted = cloudMissions.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+        this.isCloudSyncing = true;
+        this.setStorage(STORAGE_KEYS.MISSIONS, sorted);
+        this.isCloudSyncing = false;
+        this.notify();
+        return {
+          success: true,
+          message: `Berhasil menarik ${sorted.length} misi dari koleksi Cloud!`,
+          missionsCount: sorted.length,
+        };
+      }
+
+      return {
+        success: false,
+        message: 'Belum ada data misi kustom di Cloud Firestore.',
+        missionsCount: 0,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'Gagal menghubungi Cloud Firestore: ' + (err?.message || ''),
+        missionsCount: 0,
+      };
+    }
   }
 
   public resetMissionsToDefault(): boolean {
@@ -4895,23 +5545,47 @@ class DatabaseService {
   ): Promise<boolean> {
     if (!questionId || !imageDataUrl) return false;
 
-    // Save to high-capacity ImageStore
+    // Cache-busting timestamp for server URLs to ensure immediate cross-device and cross-account updates
+    let finalImageUrl = imageDataUrl;
+    if (imageDataUrl.startsWith('/images/')) {
+      const cleanPath = imageDataUrl.split('?')[0];
+      finalImageUrl = `${cleanPath}?t=${Date.now()}`;
+    }
+
     const keys = [
       `fm_q_${questionId}`,
+      `fm_q_${questionId?.toLowerCase()}`,
       questionId,
       imageFileName || '',
       imageFileName ? imageFileName.toLowerCase() : '',
     ].filter(Boolean);
 
-    await saveImageToStore(`fm_q_${questionId}`, imageDataUrl, keys);
+    await saveImageToStore(`fm_q_${questionId}`, finalImageUrl.startsWith('data:') ? finalImageUrl : imageDataUrl, keys);
 
     // Update question record
     const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
     const target = questions.find((q) => q.id === questionId);
     if (target) {
-      target.imageUrl = imageDataUrl;
+      const oldFileName = target.imageFileName;
+      const oldImageUrl = target.imageUrl;
+
+      // If replacing with a different physical image file, clean up old server file & store alias
+      if (oldFileName && oldFileName !== imageFileName) {
+        deleteImageFromStore([oldFileName, oldFileName.toLowerCase()]).catch(() => {});
+      }
+      if (oldImageUrl && oldImageUrl.startsWith('/images/')) {
+        const oldClean = oldImageUrl.split('?')[0];
+        const newClean = finalImageUrl.split('?')[0];
+        if (oldClean !== newClean) {
+          deleteImageFromServer(oldClean).catch(() => {});
+        }
+      }
+
+      target.imageUrl = finalImageUrl;
       if (imageFileName) target.imageFileName = imageFileName;
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+      // Automatically synchronize to server disk and Cloud Firestore
+      this.persistFinalMissionMaster('Super Admin').catch(() => {});
     }
     return true;
   }
@@ -4931,20 +5605,28 @@ class DatabaseService {
       delete target.imageUrl;
       target.imageFileName = '';
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+      this.persistFinalMissionMaster('Super Admin').catch(() => {});
     }
 
     if (oldImageUrl && oldImageUrl.startsWith('/images/')) {
-      deleteImageFromServer(oldImageUrl).catch(() => {});
+      const cleanUrl = oldImageUrl.split('?')[0];
+      deleteImageFromServer(cleanUrl).catch(() => {});
     }
 
     const lookupKeys = [
       `fm_q_${questionId}`,
+      `fm_q_${questionId?.toLowerCase()}`,
       questionId,
       oldFileName || '',
       oldFileName ? oldFileName.toLowerCase() : '',
     ].filter(Boolean);
 
     await deleteImageFromStore(lookupKeys);
+    deleteCloudDoc('uploaded_images', `fm_q_${questionId.toLowerCase()}`).catch(() => {});
+    if (oldFileName) {
+      const cleanKey = `final-mission_${oldFileName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
+      deleteCloudDoc('uploaded_images', cleanKey).catch(() => {});
+    }
     return true;
   }
 
@@ -4952,7 +5634,13 @@ class DatabaseService {
    * Retrieve image URL for a question from ImageStore or direct URL
    */
   public getFinalMissionQuestionImage(question: FinalMissionQuestion): string {
-    if (question.imageUrl) return question.imageUrl;
+    if (question.imageUrl) {
+      const url = question.imageUrl.trim();
+      if (url.startsWith('/') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+        return url;
+      }
+      return `/images/final-mission/${url}`;
+    }
 
     const lookupKeys = [
       `fm_q_${question.id}`,
@@ -4964,6 +5652,15 @@ class DatabaseService {
     const fromStore = getImageFromStore(lookupKeys);
     if (fromStore) return fromStore;
 
+    if (question.imageFileName && typeof question.imageFileName === 'string') {
+      const trimmed = question.imageFileName.trim();
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/')) {
+        return trimmed;
+      }
+      const clean = trimmed.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
+      return `/images/final-mission/${clean}`;
+    }
+
     return '';
   }
 
@@ -4971,7 +5668,13 @@ class DatabaseService {
    * Retrieve image URL for a matrix item (e.g. Q38 items)
    */
   public getFinalMissionMatrixItemImage(questionId: string, item: FinalMissionMatrixItem): string {
-    if (item.imageUrl) return item.imageUrl;
+    if (item.imageUrl) {
+      const url = item.imageUrl.trim();
+      if (url.startsWith('/') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+        return url;
+      }
+      return `/images/final-mission/${url}`;
+    }
 
     const lookupKeys = [
       `fm_item_${questionId}_${item.id}`,
@@ -4982,6 +5685,15 @@ class DatabaseService {
 
     const fromStore = getImageFromStore(lookupKeys);
     if (fromStore) return fromStore;
+
+    if (item.imageFileName && typeof item.imageFileName === 'string') {
+      const trimmed = item.imageFileName.trim();
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/')) {
+        return trimmed;
+      }
+      const clean = trimmed.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
+      return `/images/final-mission/${clean}`;
+    }
 
     // Fallback to default Q38 vector artwork
     const q38Default = getDefaultQ38ItemImage(item);
@@ -5001,23 +5713,39 @@ class DatabaseService {
   ): Promise<boolean> {
     if (!questionId || !itemId || !imageDataUrl) return false;
 
+    let finalImageUrl = imageDataUrl;
+    if (imageDataUrl.startsWith('/images/')) {
+      const cleanPath = imageDataUrl.split('?')[0];
+      finalImageUrl = `${cleanPath}?t=${Date.now()}`;
+    }
+
     const keys = [
       `fm_item_${questionId}_${itemId}`,
+      `fm_item_${questionId?.toLowerCase()}_${itemId?.toLowerCase()}`,
       `fm_item_${itemId}`,
       imageFileName || '',
       imageFileName ? imageFileName.toLowerCase() : '',
     ].filter(Boolean);
 
-    await saveImageToStore(`fm_item_${questionId}_${itemId}`, imageDataUrl, keys);
+    await saveImageToStore(`fm_item_${questionId}_${itemId}`, finalImageUrl.startsWith('data:') ? finalImageUrl : imageDataUrl, keys);
 
     const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
     const target = questions.find((q) => q.id === questionId);
     if (target && Array.isArray(target.matrixItems)) {
       const itm = target.matrixItems.find((i) => i.id === itemId);
       if (itm) {
-        itm.imageUrl = imageDataUrl;
+        const oldImageUrl = itm.imageUrl;
+        if (oldImageUrl && oldImageUrl.startsWith('/images/')) {
+          const oldClean = oldImageUrl.split('?')[0];
+          const newClean = finalImageUrl.split('?')[0];
+          if (oldClean !== newClean) {
+            deleteImageFromServer(oldClean).catch(() => {});
+          }
+        }
+        itm.imageUrl = finalImageUrl;
         if (imageFileName) itm.imageFileName = imageFileName;
         this.saveFinalMissionQuestion(target);
+        this.persistFinalMissionMaster('Super Admin').catch(() => {});
       }
     }
     return true;

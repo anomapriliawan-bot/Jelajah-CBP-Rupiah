@@ -71,8 +71,11 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
   const currentUser = db.getCurrentUser();
   const schoolSettings = db.getSchoolSettings();
 
-  // Detect appropriate classification from user's age/level or default to 'anak'
+  // Detect appropriate classification from user's ageCategory or fallback to grade/role
   const determineInitialClassification = (): FinalMissionClassification => {
+    if (currentUser?.ageCategory) {
+      return currentUser.ageCategory;
+    }
     if (currentUser?.grade) {
       const g = currentUser.grade.toLowerCase();
       if (g.includes('guru') || g.includes('dewasa') || g.includes('umum') || g.includes('admin')) {
@@ -81,6 +84,9 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
       if (g.includes('mahasiswa') || g.includes('sma') || g.includes('smk') || g.includes('remaja')) {
         return 'remaja';
       }
+    }
+    if (currentUser?.role && ['teacher', 'admin', 'superadmin', 'reviewer'].includes(currentUser.role)) {
+      return 'dewasa';
     }
     return 'anak';
   };
@@ -133,9 +139,17 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
     const unsub = db.subscribe(() => {
       setProgress(db.getFinalMissionProgress(currentUser?.id || 'USR-TESTER', classification));
       setStageAccess(db.getFinalMissionStageAccess());
+      if (activeStage) {
+        const stageName =
+          activeStage === 'pemula' ? STAGES.PEMULA : activeStage === 'terampil' ? STAGES.TERAMPIL : STAGES.MASTER;
+        const fresh = db.getFinalMissionQuestions(classification, stageName);
+        if (fresh.length > 0) {
+          setStageQuestions(fresh);
+        }
+      }
     });
     return unsub;
-  }, [classification, currentUser?.id]);
+  }, [classification, currentUser?.id, activeStage]);
 
   // Stage unlock verification helper with Admin bypass support
   const isStageUnlocked = (stage: FinalMissionStage) => {
@@ -307,9 +321,14 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
     const stageName =
       stage === 'pemula' ? STAGES.PEMULA : stage === 'terampil' ? STAGES.TERAMPIL : STAGES.MASTER;
 
-    const questions = db.getFinalMissionQuestions(classification, stageName);
+    const effectiveClassification: FinalMissionClassification =
+      (currentUser?.role === 'student' && currentUser?.ageCategory)
+        ? currentUser.ageCategory
+        : classification;
+
+    const questions = db.getFinalMissionQuestions(effectiveClassification, stageName);
     if (questions.length === 0) {
-      alert(`Belum ada butir soal untuk ${stageName} pada klasifikasi ${classification}. Silakan tambahkan soal di menu Admin.`);
+      alert(`Belum ada butir soal untuk ${stageName} pada klasifikasi ${effectiveClassification}. Silakan tambahkan soal di menu Admin.`);
       return;
     }
 
@@ -898,12 +917,25 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
 
           {/* Classification Selection Tabs (Anak-Anak, Remaja, Dewasa) */}
           <section className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
                   <Users className="w-5 h-5 text-indigo-400" />
-                  <span>Pilih Klasifikasi Peserta</span>
+                  <span>Klasifikasi Kategori Umur Peserta</span>
                 </h3>
+                {currentUser?.ageCategory && (
+                  <p className="text-xs text-amber-300 font-semibold mt-0.5">
+                    Kategori profil Anda:{' '}
+                    <span className="text-white font-black uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/30 border border-amber-400/40">
+                      {currentUser.ageCategory === 'dewasa'
+                        ? 'Dewasa (31-55 th)'
+                        : currentUser.ageCategory === 'remaja'
+                        ? 'Remaja (18-30 th)'
+                        : 'Anak-anak (10-17 th)'}
+                    </span>{' '}
+                    (Soal Misi Akhir disesuaikan secara otomatis)
+                  </p>
+                )}
               </div>
             </div>
 

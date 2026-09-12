@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { normalizeImageUrl } from '../utils/imageHelper';
 import {
   Mission,
   Lesson,
@@ -322,6 +323,28 @@ export function parseExcelWorkbook(fileBuffer: ArrayBuffer | Uint8Array): Parsed
         const pts = Number(getVal(r, 'point_reward', 'points', 'poin') || 150);
         const rawStatus = getVal(r, 'status', 'status_konten');
         const status = normalizeContentStatus(rawStatus);
+        const rawImageUrl = String(
+          getVal(
+            r,
+            'image_url',
+            'gambar',
+            'url_gambar',
+            'cover_url',
+            'cover',
+            'opening_image_url',
+            'foto',
+            'link_gambar',
+            'file_gambar',
+            'image',
+            'img',
+            'sampul',
+            'url_foto',
+            'tautan_gambar',
+            'media',
+            'illustration'
+          ) || ''
+        ).trim();
+        const imageUrl = normalizeImageUrl(rawImageUrl);
 
         result.missions.push({
           id,
@@ -338,6 +361,8 @@ export function parseExcelWorkbook(fileBuffer: ArrayBuffer | Uint8Array): Parsed
           orderIndex: idx + 1,
           badgeId: `BDG-${String(idx + 1).padStart(2, '0')}`,
           iconName: 'book-open',
+          imageUrl: imageUrl || '',
+          openingImageUrl: imageUrl || '',
         });
       });
     }
@@ -388,7 +413,28 @@ export function parseExcelWorkbook(fileBuffer: ArrayBuffer | Uint8Array): Parsed
         ).trim();
         const takeawaysRaw = String(getVal(r, 'key_takeaways', 'poin_penting', 'kesimpulan') || '');
         const keyTakeaways = takeawaysRaw ? takeawaysRaw.split(/[;\n\r]/).map((s) => s.trim()).filter(Boolean) : [];
-        const imageUrl = String(getVal(r, 'image_url', 'gambar', 'url_gambar', 'opening_image_url') || '').trim();
+        const imageUrl = normalizeImageUrl(
+          String(
+            getVal(
+              r,
+              'image_url',
+              'gambar',
+              'url_gambar',
+              'opening_image_url',
+              'foto',
+              'link_gambar',
+              'file_gambar',
+              'image',
+              'img',
+              'cover',
+              'sampul',
+              'url_foto',
+              'tautan_gambar',
+              'media',
+              'illustration'
+            ) || ''
+          ).trim()
+        );
         const imageBrief = String(getVal(r, 'image_brief', 'brief_gambar', 'image_caption', 'keterangan_gambar', 'caption') || '').trim();
         const interactionPrompt = String(getVal(r, 'interaction_prompt', 'prompt_interaksi', 'ayo_berpikir', 'pertanyaan_interaktif') || '').trim();
         const gradeScope = String(getVal(r, 'grade_scope', 'fase', 'tingkat', 'kelas') || 'Semua Tingkat').trim();

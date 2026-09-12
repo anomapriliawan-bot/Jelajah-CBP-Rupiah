@@ -88,6 +88,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Budi Santoso',
         'Peran (Siswa/Guru/Admin)': 'Siswa',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Anak',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '0094821031',
         'NIP (Guru)': '',
@@ -101,6 +102,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Siti Nurhaliza',
         'Peran (Siswa/Guru/Admin)': 'Siswa',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Anak',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '0094821032',
         'NIP (Guru)': '',
@@ -117,6 +119,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Ibu Dewi Anggraeni, S.Pd.',
         'Peran (Siswa/Guru/Admin)': 'Guru',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Dewasa',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '',
         'NIP (Guru)': '198504122010012015',
@@ -133,6 +136,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Ibu Dewi Anggraeni, S.Pd.',
         'Peran (Siswa/Guru/Admin)': 'Guru',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Dewasa',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '',
         'NIP (Guru)': '198504122010012015',
@@ -146,6 +150,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Budi Santoso',
         'Peran (Siswa/Guru/Admin)': 'Siswa',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Anak',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '0094821031',
         'NIP (Guru)': '',
@@ -159,6 +164,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
       {
         'Nama Lengkap*': 'Siti Nurhaliza',
         'Peran (Siswa/Guru/Admin)': 'Siswa',
+        'Kategori Umur (Anak/Remaja/Dewasa)': 'Anak',
         'Nama Sekolah (Opsional)': 'SD Negeri 2 Medewi',
         'NISN (Siswa)': '0094821032',
         'NIP (Guru)': '',
@@ -177,6 +183,7 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
   ws['!cols'] = [
     { wch: 30 }, // Nama Lengkap
     { wch: 20 }, // Peran
+    { wch: 28 }, // Kategori Umur
     { wch: 28 }, // Nama Sekolah
     { wch: 16 }, // NISN
     { wch: 22 }, // NIP
@@ -193,8 +200,9 @@ export function generateUsersTemplateExcel(targetRole: 'student' | 'teacher' | '
   const instructionsData = [
     { 'Petunjuk Pengisian Akun Pengguna': '1. Kolom "Nama Lengkap*" wajib diisi.' },
     { 'Petunjuk Pengisian Akun Pengguna': '2. Peran dapat diisi: Siswa, Guru, atau Admin.' },
-    { 'Petunjuk Pengisian Akun Pengguna': '3. Username & Password: jika dikosongkan, sistem akan membuatkan kode unik yang mudah diingat (contoh: guru.dewi.14 / std.budi.208 dan PIN Rupiah2026).' },
-    { 'Petunjuk Pengisian Akun Pengguna': '4. Data dapat langsung dicetak atau diexport ke Excel untuk dibagikan kepada siswa dan guru.' },
+    { 'Petunjuk Pengisian Akun Pengguna': '3. Kategori Umur dapat diisi: Anak (10-17 th), Remaja (18-30 th), atau Dewasa (31-55 th). Kategori ini menjadi penentu soal Misi Akhir.' },
+    { 'Petunjuk Pengisian Akun Pengguna': '4. Username & Password: jika dikosongkan, sistem akan membuatkan kode unik yang mudah diingat (contoh: guru.dewi.14 / std.budi.208 dan PIN Rupiah2026).' },
+    { 'Petunjuk Pengisian Akun Pengguna': '5. Data dapat langsung dicetak atau diexport ke Excel untuk dibagikan kepada siswa dan guru.' },
   ];
   const wsInst = XLSX.utils.json_to_sheet(instructionsData);
   wsInst['!cols'] = [{ wch: 100 }];
@@ -271,6 +279,7 @@ export function parseUsersExcel(fileBuffer: ArrayBuffer): any[] {
       nisn: getVal(['nisn']),
       nip: getVal(['nip']),
       gender: getVal(['jenis kelamin', 'gender', 'jk', 'kelamin']),
+      ageCategory: getVal(['kategori umur', 'kategori', 'usia', 'age']),
       className: getVal(['kelas', 'class', 'rombel']),
       phone: getVal(['telepon', 'wa', 'hp', 'phone']),
       email: getVal(['email']),
@@ -291,6 +300,12 @@ export function exportUsersToExcel(users: User[], title: string = 'Data_Akun_Pen
     'ID Pengguna': u.id,
     'Nama Lengkap': u.name,
     'Peran': u.role === 'superadmin' ? 'Super Admin' : u.role === 'admin' ? 'Admin Sekolah' : u.role === 'teacher' ? 'Guru' : 'Siswa',
+    'Kategori Umur':
+      u.ageCategory === 'dewasa'
+        ? 'Dewasa (31-55 th)'
+        : u.ageCategory === 'remaja'
+        ? 'Remaja (18-30 th)'
+        : 'Anak-anak (10-17 th)',
     'Sekolah': u.school || '-',
     'Username': u.username || '-',
     'Kata Sandi / PIN': u.password || '-',
@@ -311,6 +326,7 @@ export function exportUsersToExcel(users: User[], title: string = 'Data_Akun_Pen
     { wch: 16 }, // ID
     { wch: 28 }, // Nama
     { wch: 16 }, // Peran
+    { wch: 22 }, // Kategori Umur
     { wch: 26 }, // Sekolah
     { wch: 24 }, // Username
     { wch: 20 }, // Password

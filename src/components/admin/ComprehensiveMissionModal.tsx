@@ -35,6 +35,8 @@ import {
 import { db, normalizeMissionId } from '../../services/db';
 import { sounds } from '../../utils/audio';
 import { compressImageFile } from '../../utils/imageCompressor';
+import { uploadDataUrlToServer } from '../../services/uploadService';
+import { saveImageToStore, getImageFromStore } from '../../services/imageStore';
 
 interface ComprehensiveMissionModalProps {
   mission: Mission | null;
@@ -127,7 +129,7 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
         title: mission.title || '',
         subtitle: mission.subtitle || '',
         storyOpening: mission.storyOpening || mission.openingStory || '',
-        imageUrl: mission.imageUrl || mission.openingImageUrl || '',
+        imageUrl: mission.imageUrl || mission.openingImageUrl || getImageFromStore([canonicalId, `cbr_img_${canonicalId}`, mission.code, mission.id]) || '',
         badgeRewardId: mission.badgeRewardId || mission.badgeId || 'BDG-01',
         orderIndex: mission.orderIndex || 1,
         levelNumber: mission.levelNumber || 1,
@@ -209,9 +211,17 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
       setCoverUploadMsg(null);
       const res = await compressImageFile(file, 900, 0.78);
       if (res.dataUrl) {
-        setInfoForm((prev) => ({ ...prev, imageUrl: res.dataUrl }));
+        // Upload to server and Firestore uploaded_images
+        const uploadRes = await uploadDataUrlToServer(file.name, res.dataUrl, 'missions');
+        const finalUrl = uploadRes?.url || res.dataUrl;
+
+        // Save into local memory & IndexedDB cache for instant display
+        const targetMissionId = mission ? normalizeMissionId(mission.id || mission.code) : infoForm.code;
+        saveImageToStore(targetMissionId, res.dataUrl, [finalUrl, infoForm.code]);
+
+        setInfoForm((prev) => ({ ...prev, imageUrl: finalUrl }));
         sounds.playPop();
-        setCoverUploadMsg(`✅ Foto berhasil diunggah (${res.compressedSizeKb} KB)`);
+        setCoverUploadMsg(`✅ Foto berhasil diunggah & disinkronkan (${res.compressedSizeKb} KB)`);
       }
       setIsUploadingCover(false);
     } catch (err: any) {
@@ -225,7 +235,15 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
       setIsUploadingLessonImg(true);
       const res = await compressImageFile(file, 900, 0.78);
       if (res.dataUrl) {
-        setLessonForm((prev) => ({ ...prev, imageUrl: res.dataUrl, image_url: res.dataUrl }));
+        // Upload to server and Firestore uploaded_images
+        const uploadRes = await uploadDataUrlToServer(file.name, res.dataUrl, 'lessons');
+        const finalUrl = uploadRes?.url || res.dataUrl;
+
+        // Save into local memory & IndexedDB cache
+        const lessonIdentifier = lessonForm.id || lessonForm.code || `temp_${Date.now()}`;
+        saveImageToStore(lessonIdentifier, res.dataUrl, [finalUrl]);
+
+        setLessonForm((prev) => ({ ...prev, imageUrl: finalUrl, image_url: finalUrl }));
         sounds.playPop();
       }
       setIsUploadingLessonImg(false);

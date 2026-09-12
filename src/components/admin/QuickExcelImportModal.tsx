@@ -138,26 +138,9 @@ export const QuickExcelImportModal: React.FC<QuickExcelImportModalProps> = ({
           }
         );
 
-        // Simpan otomatis sebagai default sistem
+        // Simpan otomatis sebagai default sistem ke Cloud Firestore & Memori
         try {
-          const defaultPayload = {
-            missions: db.getMissions(),
-            lessons: db.getLessons(),
-            activities: db.getActivities(),
-            practiceQuestions: db.getPracticeQuestions(),
-            badges: db.getBadges(),
-            reflections: db.getReflections(),
-            references: db.getReferences(),
-            tournamentPackages: db.getTournamentPackages(),
-            tournamentQuestions: db.getTournamentQuestions(),
-            tournamentEvents: db.getTournamentEvents(),
-          };
-          localStorage.setItem('jr_db_custom_default_master', JSON.stringify(defaultPayload));
-          fetch('/api/set-system-default', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(defaultPayload),
-          }).catch(() => {});
+          db.persistSystemDefaultMaster(currentUser?.name || 'Admin Kurikulum BI').catch(() => {});
         } catch {}
 
         setIsImporting(false);

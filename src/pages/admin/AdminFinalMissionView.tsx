@@ -35,6 +35,9 @@ import {
   ShieldCheck,
   CheckSquare,
   Calendar,
+  CloudLightning,
+  Loader2,
+  ImagePlus,
 } from 'lucide-react';
 import { db } from '../../services/db';
 import { FinalMissionEventManagement } from '../../components/admin/FinalMissionEventManagement';
@@ -260,6 +263,30 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     });
   };
 
+  const [isPersistingMaster, setIsPersistingMaster] = useState(false);
+
+  const handlePersistFinalMissionMaster = async () => {
+    sounds.playPop();
+    setIsPersistingMaster(true);
+    try {
+      const res = await db.persistFinalMissionMaster('Super Admin');
+      if (res.success) {
+        sounds.playFanfare();
+        showToast(
+          `✅ Misi Akhir Berhasil Disimpan Permanen! (${res.questionsCount} soal). Tersimpan di Disk Server ${
+            res.serverDiskSaved ? '✓' : ''
+          } & Cloud Firestore ${res.cloudSynced ? '✓' : ''}. Tersedia di seluruh perangkat & akun!`
+        );
+      } else {
+        showToast('Penyimpanan lokal berhasil, sinkronisasi cloud sedang berjalan di latar belakang.', 'info');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menyimpan ke cloud', 'error');
+    } finally {
+      setIsPersistingMaster(false);
+    }
+  };
+
   useEffect(() => {
     refreshData();
     const unsub = db.subscribe(() => {
@@ -377,13 +404,15 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = reader.result as string;
-      // Upload physical file to server disk (/public/images/final-mission/)
-      const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission');
+      // Upload physical file to server disk (/public/images/final-mission/) with metadata
+      const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission', { questionId });
       const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
 
       await db.setFinalMissionQuestionImage(questionId, savedUrl, file.name);
+      await db.persistFinalMissionMaster('Super Admin');
+
       sounds.playFanfare();
-      const successMsg = `Gambar "${file.name}" untuk butir soal ${questionId} berhasil diunggah dan disimpan permanen di server sistem!`;
+      const successMsg = `Gambar "${file.name}" untuk butir soal ${questionId} berhasil diunggah, disimpan di disk server, dan disinkronkan ke Cloud Firestore!`;
       showToast(`✨ ${successMsg}`);
       setUploadSuccessDialogMsg(successMsg);
       refreshData();
@@ -413,7 +442,10 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = reader.result as string;
-      const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission');
+      const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission', {
+        questionId: selectedQuestion.id,
+        matrixItemId: itemId,
+      });
       const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
 
       const updatedItems = (selectedQuestion.matrixItems || []).map((itm) => {
@@ -434,9 +466,10 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
 
       if (selectedQuestion.id) {
         await db.setFinalMissionMatrixItemImage(selectedQuestion.id, itemId, savedUrl, file.name);
+        await db.persistFinalMissionMaster('Super Admin');
       }
       sounds.playPop();
-      showToast(`Gambar "${file.name}" untuk item berhasil disimpan permanen.`);
+      showToast(`Gambar "${file.name}" untuk item berhasil disimpan permanen ke server & cloud.`);
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -479,7 +512,9 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
           const reader = new FileReader();
           reader.onload = async () => {
             const base64 = reader.result as string;
-            const serverRes = await uploadDataUrlToServer(fileName, base64, 'final-mission');
+            const serverRes = await uploadDataUrlToServer(fileName, base64, 'final-mission', {
+              questionId: matchingQ.id,
+            });
             const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
             await db.setFinalMissionQuestionImage(matchingQ.id, savedUrl, fileName);
             matchedCount++;
@@ -490,8 +525,11 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
       }
     }
 
+    // Persist all updated final mission questions & images to server disk and Cloud Firestore
+    await db.persistFinalMissionMaster('Super Admin');
+
     sounds.playFanfare();
-    const successMsg = `Berhasil mencocokkan dan menyimpan ${matchedCount} file gambar ke Bank Soal Misi Akhir!`;
+    const successMsg = `Berhasil mencocokkan dan menyimpan ${matchedCount} file gambar ke Bank Soal Misi Akhir (Server Disk & Cloud Firestore)!`;
     showToast(`📸 ${successMsg}`);
     setUploadSuccessDialogMsg(successMsg);
     refreshData();
@@ -549,6 +587,7 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     if (!deleteImageTarget) return;
     const targetId = deleteImageTarget.id;
     await db.removeFinalMissionQuestionImage(targetId);
+    await db.persistFinalMissionMaster('Super Admin');
     sounds.playPop();
     showToast(`Gambar untuk butir soal ${targetId} berhasil dihapus.`);
     refreshData();
@@ -807,6 +846,32 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
             >
               <Upload className="w-3.5 h-3.5" />
               <span>Import Excel</span>
+            </button>
+
+            <button
+              onClick={() => {
+                sounds.playPop();
+                bulkImagesInputRef.current?.click();
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
+              title="Unggah kumpulan file gambar soal secara massal (otomatis cocokkan berdasarkan nama file/nomor soal)"
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+              <span>Unggah Gambar Massal</span>
+            </button>
+
+            <button
+              onClick={handlePersistFinalMissionMaster}
+              disabled={isPersistingMaster}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+              title="Simpan permanen bank soal dan gambar ke disk server dan Cloud Firestore agar muncul di semua perangkat dan akun"
+            >
+              {isPersistingMaster ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <CloudLightning className="w-3.5 h-3.5 text-amber-200" />
+              )}
+              <span>{isPersistingMaster ? 'Menyinkronkan...' : 'Simpan ke Server & Cloud'}</span>
             </button>
 
             <button

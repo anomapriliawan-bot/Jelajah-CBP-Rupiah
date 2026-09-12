@@ -12,6 +12,7 @@ import {
 import { Lesson, Mission } from '../../types';
 import { db, normalizeMissionId } from '../../services/db';
 import { compressImageFile } from '../../utils/imageCompressor';
+import { uploadDataUrlToServer } from '../../services/uploadService';
 import { sounds } from '../../utils/audio';
 
 interface MatchedImageItem {
@@ -49,13 +50,27 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
   const autoMatchLesson = (fileName: string): string => {
     const cleanName = fileName.toLowerCase();
 
+    // 0. Mission cover match (e.g. cover_misi_1, cover_c01, misi_01, mis-01, c01.jpg)
+    if (
+      cleanName.includes('cover') ||
+      cleanName.match(/^misi[-_ ]?\d+\.(png|jpg|jpeg|webp)$/i) ||
+      cleanName.match(/^(?:jr-)?([cbp]\d+)\.(png|jpg|jpeg|webp)$/i)
+    ) {
+      const misMatch = cleanName.match(/(?:cover[-_ ]?)?(?:jr-)?([cbp]\d+|misi[-_ ]?\d+|mis[-_ ]?\d+)/i);
+      if (misMatch) {
+        const canonical = normalizeMissionId(misMatch[1]);
+        const foundMis = missions.find((m) => normalizeMissionId(m.id || m.code) === canonical);
+        if (foundMis) return `mission:${foundMis.id}`;
+      }
+    }
+
     // 1. Direct MAT code match (e.g. MAT-001, MAT-1, mat01)
     const matMatch = cleanName.match(/mat[-_]?(\d+)/i);
     if (matMatch) {
       const num = parseInt(matMatch[1], 10);
       const code = `MAT-${String(num).padStart(3, '0')}`;
       const found = lessons.find((l) => l.code === code || l.id === code || l.id === `MAT-${num}`);
-      if (found) return found.id;
+      if (found) return `lesson:${found.id}`;
     }
 
     // 2. Mission code and card order match (e.g. C01_1, JR-C01-2, MISI 1 KARTU 2, MISI-1-2)
@@ -69,7 +84,7 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
           normalizeMissionId(l.missionId) === canonicalMission &&
           Number(l.contentOrder || l.orderIndex || 1) === cardOrder
       );
-      if (found) return found.id;
+      if (found) return `lesson:${found.id}`;
     }
 
     // 3. Simple numeric match if only number in filename (e.g. 1.jpg -> MAT-001)
@@ -78,7 +93,7 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
       const num = parseInt(singleNumMatch[1], 10);
       const code = `MAT-${String(num).padStart(3, '0')}`;
       const found = lessons.find((l) => l.code === code || l.id === code);
-      if (found) return found.id;
+      if (found) return `lesson:${found.id}`;
     }
 
     // 4. Match by title similarity
@@ -87,11 +102,11 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
       const words = titleClean.split(/\s+/).filter((w) => w.length > 3);
       const matches = words.filter((w) => cleanName.includes(w));
       if (matches.length >= 2) {
-        return l.id;
+        return `lesson:${l.id}`;
       }
     }
 
-    return lessons[0]?.id || '';
+    return lessons[0]?.id ? `lesson:${lessons[0].id}` : '';
   };
 
   const handleFiles = async (files: FileList | File[]) => {
@@ -131,13 +146,56 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
     let successCount = 0;
 
     for (const item of items) {
-      const lesson = lessons.find((l) => l.id === item.matchedLessonId);
+      if (!item.dataUrl) continue;
+
+      // Case A: Matched to a Mission Cover
+      if (item.matchedLessonId.startsWith('mission:')) {
+        const misId = item.matchedLessonId.replace('mission:', '');
+        const mission = missions.find(
+          (m) =>
+            m.id === misId ||
+            m.code === misId ||
+            normalizeMissionId(m.id || m.code) === normalizeMissionId(misId)
+        );
+        if (mission) {
+          try {
+            const uploadRes = await uploadDataUrlToServer(item.fileName, item.dataUrl, 'missions');
+            const finalUrl = uploadRes?.url || item.dataUrl;
+
+            db.updateMission(
+              mission.id,
+              {
+                imageUrl: finalUrl,
+                openingImageUrl: finalUrl,
+              },
+              'Admin Kurikulum',
+              `Unggah cover misi: ${item.fileName}`
+            );
+            item.status = 'saved';
+            successCount++;
+            continue;
+          } catch (err) {
+            console.error('Error saving image for mission:', mission.id, err);
+            item.status = 'error';
+            continue;
+          }
+        }
+      }
+
+      // Case B: Matched to a Lesson Slide
+      const cleanLessonId = item.matchedLessonId.replace('lesson:', '');
+      const lesson = lessons.find((l) => l.id === cleanLessonId || l.code === cleanLessonId);
       if (lesson && item.dataUrl) {
         try {
+          // Upload to server disk & Firestore uploaded_images
+          const uploadRes = await uploadDataUrlToServer(item.fileName, item.dataUrl, 'lessons');
+          const finalUrl = uploadRes?.url || item.dataUrl;
+
           db.updateLesson(
             lesson.id,
             {
-              imageUrl: item.dataUrl,
+              imageUrl: finalUrl,
+              image_url: finalUrl,
               missionId: lesson.missionId,
               contentOrder: Number(lesson.contentOrder || lesson.orderIndex || 1),
               orderIndex: Number(lesson.orderIndex || lesson.contentOrder || 1),
@@ -275,13 +333,22 @@ export const BatchImageUploadModal: React.FC<BatchImageUploadModalProps> = ({
                                 prev.map((it, i) => (i === idx ? { ...it, matchedLessonId: newId } : it))
                               );
                             }}
-                            className="text-xs font-semibold px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 max-w-[260px] truncate"
+                            className="text-xs font-semibold px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 max-w-[280px] truncate"
                           >
-                            {lessons.map((l) => (
-                              <option key={l.id} value={l.id}>
-                                {l.code} - {l.title.slice(0, 30)}...
-                              </option>
-                            ))}
+                            <optgroup label="Cover Misi (Sampul Utama)">
+                              {missions.map((m) => (
+                                <option key={`mis-${m.id}`} value={`mission:${m.id}`}>
+                                  Cover Misi: {m.code || m.id} - {m.title.slice(0, 24)}
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Kartu Materi (Slide Misi)">
+                              {lessons.map((l) => (
+                                <option key={`les-${l.id}`} value={`lesson:${l.id}`}>
+                                  Materi: {l.code} - {l.title.slice(0, 24)}
+                                </option>
+                              ))}
+                            </optgroup>
                           </select>
                         </div>
 

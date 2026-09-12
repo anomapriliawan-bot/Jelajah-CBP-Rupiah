@@ -83,6 +83,13 @@ export const TeacherStudentDetailModal: React.FC<TeacherStudentDetailModalProps>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${user.gender === 'female' ? 'bg-pink-500/30 text-pink-200 border border-pink-400/30' : 'bg-blue-500/30 text-blue-200 border border-blue-400/30'}`}>
                   {user.gender === 'female' ? '👧 Perempuan' : '👦 Laki-laki'}
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-400/25 text-amber-200 border border-amber-400/30" title="Kategori umur penentu soal Misi Akhir">
+                  {user.ageCategory === 'dewasa'
+                    ? '💼 Dewasa (31-55 th)'
+                    : user.ageCategory === 'remaja'
+                    ? '🧑 Remaja (18-30 th)'
+                    : '🧒 Anak-anak (10-17 th)'}
+                </span>
               </div>
               <p className="text-xs text-blue-200">
                 NISN: <span className="font-mono">{user.nisn || `00${studentId.replace(/\D/g, '') || '9482103'}`}</span> • ID Siswa: <span className="font-mono">{user.id}</span> • Sekolah: SDN Percobaan 01

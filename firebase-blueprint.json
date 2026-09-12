@@ -52,6 +52,32 @@
       },
       "required": ["schoolName"]
     },
+    "SystemDefaultMaster": {
+      "title": "SystemDefaultMaster",
+      "description": "Cross-device master curriculum defaults for missions, lessons, and activities",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "version": { "type": "number" },
+        "missions": { "type": "array" }
+      },
+      "required": ["id", "updatedAt"]
+    },
+    "FinalMissionMaster": {
+      "title": "FinalMissionMaster",
+      "description": "Cross-device master bank for Final Mission questions and image metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "questionsCount": { "type": "number" },
+        "questions": { "type": "array" }
+      },
+      "required": ["id", "updatedAt"]
+    },
     "School": {
       "title": "School",
       "description": "School directory record",

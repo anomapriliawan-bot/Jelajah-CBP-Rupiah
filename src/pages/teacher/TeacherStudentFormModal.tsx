@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, UserPlus, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { db } from '../../services/db';
-import { User, Class } from '../../types';
+import { User, Class, FinalMissionClassification } from '../../types';
 
 interface TeacherStudentFormModalProps {
   initialStudent?: User | null;
@@ -21,12 +21,22 @@ export const TeacherStudentFormModal: React.FC<TeacherStudentFormModalProps> = (
   const classes = db.getClasses();
   const schoolSettings = db.getSchoolSettings();
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    name: string;
+    nisn: string;
+    gender: 'male' | 'female';
+    password: string;
+    grade: string;
+    ageCategory: FinalMissionClassification;
+    school: string;
+    classId: string;
+  }>({
     name: initialStudent?.name || '',
     nisn: initialStudent?.nisn || '',
     gender: (initialStudent?.gender || 'male') as 'male' | 'female',
     password: initialStudent?.password || '123',
     grade: initialStudent?.grade || 'Kelas 5',
+    ageCategory: initialStudent?.ageCategory || 'anak',
     school: initialStudent?.school || schoolSettings.schoolName || 'SD Negeri 2 Medewi',
     classId: defaultClassId || classes[0]?.id || '',
   });
@@ -56,6 +66,7 @@ export const TeacherStudentFormModal: React.FC<TeacherStudentFormModalProps> = (
             gender: formData.gender,
             password: formData.password.trim() || '123',
             grade: formData.grade,
+            ageCategory: formData.ageCategory,
             school: formData.school.trim(),
             avatar: formData.gender === 'female' ? 'perempuan' : 'laki-laki',
           },
@@ -73,6 +84,7 @@ export const TeacherStudentFormModal: React.FC<TeacherStudentFormModalProps> = (
             gender: formData.gender,
             password: formData.password.trim() || '123',
             grade: formData.grade,
+            ageCategory: formData.ageCategory,
             school: formData.school.trim(),
             avatar: formData.gender === 'female' ? 'perempuan' : 'laki-laki',
           },
@@ -226,6 +238,65 @@ export const TeacherStudentFormModal: React.FC<TeacherStudentFormModalProps> = (
               />
               <p className="text-[10px] text-slate-400 mt-1">Standar default adalah 123</p>
             </div>
+          </div>
+
+          {/* Kategori Umur Peserta */}
+          <div className="p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-black text-amber-900 uppercase tracking-wider">
+                Kategori Umur Siswa <span className="text-rose-500">*</span>
+              </label>
+              <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full">
+                Penentu Soal Misi Akhir
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, ageCategory: 'anak' })}
+                className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                  formData.ageCategory === 'anak'
+                    ? 'bg-blue-600 border-blue-600 text-white font-black shadow-xs'
+                    : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/50 font-semibold'
+                }`}
+              >
+                <div className="text-xs">🧒 Anak-anak</div>
+                <div className={`text-[10px] ${formData.ageCategory === 'anak' ? 'text-blue-100' : 'text-slate-500'}`}>
+                  10 - 17 th
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, ageCategory: 'remaja' })}
+                className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                  formData.ageCategory === 'remaja'
+                    ? 'bg-purple-600 border-purple-600 text-white font-black shadow-xs'
+                    : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/50 font-semibold'
+                }`}
+              >
+                <div className="text-xs">🧑 Remaja</div>
+                <div className={`text-[10px] ${formData.ageCategory === 'remaja' ? 'text-purple-100' : 'text-slate-500'}`}>
+                  18 - 30 th
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, ageCategory: 'dewasa' })}
+                className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                  formData.ageCategory === 'dewasa'
+                    ? 'bg-emerald-600 border-emerald-600 text-white font-black shadow-xs'
+                    : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/50 font-semibold'
+                }`}
+              >
+                <div className="text-xs">💼 Dewasa</div>
+                <div className={`text-[10px] ${formData.ageCategory === 'dewasa' ? 'text-emerald-100' : 'text-slate-500'}`}>
+                  31 - 55 th
+                </div>
+              </button>
+            </div>
+            <p className="text-[10px] text-amber-800/80">
+              Paket butir soal petualangan akhir (Sang Penjelajah Rupiah) otomatis disesuaikan dengan kategori umur yang dipilih.
+            </p>
           </div>
 
           {/* Footer Buttons */}

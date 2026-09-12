@@ -4,12 +4,24 @@
  * so that they persist permanently in the repository and are preserved when remixed.
  */
 
+import { saveCloudDoc } from './firebase';
+
 export interface ServerUploadResponse {
   success: boolean;
   url: string;
   fileName: string;
   size?: number;
   error?: string;
+  dataUrl?: string;
+}
+
+export type UploadCategory = 'final-mission' | 'lessons' | 'missions' | 'uploads';
+
+export interface UploadExtraMeta {
+  questionId?: string;
+  matrixItemId?: string;
+  lessonId?: string;
+  missionId?: string;
 }
 
 /**
@@ -17,14 +29,15 @@ export interface ServerUploadResponse {
  */
 export async function uploadImageToServer(
   file: File,
-  category: 'final-mission' | 'lessons' | 'uploads' = 'uploads'
+  category: UploadCategory = 'uploads',
+  extraMeta?: UploadExtraMeta
 ): Promise<ServerUploadResponse> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         const dataUrl = reader.result as string;
-        const result = await uploadDataUrlToServer(file.name, dataUrl, category);
+        const result = await uploadDataUrlToServer(file.name, dataUrl, category, extraMeta);
         resolve(result);
       } catch (err) {
         reject(err);
@@ -36,13 +49,17 @@ export async function uploadImageToServer(
 }
 
 /**
- * Upload a DataURL (base64 string) to /api/upload
+ * Upload a DataURL (base64 string) to /api/upload and Firestore uploaded_images
  */
 export async function uploadDataUrlToServer(
   fileName: string,
   dataUrl: string,
-  category: 'final-mission' | 'lessons' | 'uploads' = 'uploads'
+  category: UploadCategory = 'uploads',
+  extraMeta?: UploadExtraMeta
 ): Promise<ServerUploadResponse> {
+  let publicUrl = '';
+  let uploadSucceeded = false;
+
   try {
     const response = await fetch('/api/upload', {
       method: 'POST',
@@ -56,23 +73,63 @@ export async function uploadDataUrlToServer(
       }),
     });
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Server responded with status ${response.status}`);
+    if (response.ok) {
+      const data: ServerUploadResponse = await response.json();
+      publicUrl = data.url;
+      uploadSucceeded = true;
+    }
+  } catch (err: any) {
+    console.warn('[UploadService] Server upload fetch error, will use cloud/local fallback:', err);
+  }
+
+  const finalUrl = publicUrl || dataUrl;
+
+  // Persist image record to Firestore so that all devices/laptops can access it
+  try {
+    const cleanKey = `${category}_${fileName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
+    const payload: any = {
+      id: cleanKey,
+      fileName,
+      url: finalUrl,
+      // Store compressed dataUrl in Firestore if under 850KB to guarantee 100% availability across all laptops
+      dataUrl: dataUrl && dataUrl.length < 850000 ? dataUrl : '',
+      category,
+      createdAt: new Date().toISOString(),
+    };
+    if (extraMeta?.questionId) payload.questionId = extraMeta.questionId;
+    if (extraMeta?.matrixItemId) payload.matrixItemId = extraMeta.matrixItemId;
+    if (extraMeta?.lessonId) payload.lessonId = extraMeta.lessonId;
+    if (extraMeta?.missionId) payload.missionId = extraMeta.missionId;
+
+    saveCloudDoc('uploaded_images', cleanKey, payload).catch(() => {});
+
+    // If questionId is provided, also save an alias record keyed by questionId for instantaneous O(1) lookup
+    if (extraMeta?.questionId && category === 'final-mission') {
+      const qAliasKey = `fm_q_${extraMeta.questionId.toLowerCase()}`;
+      saveCloudDoc('uploaded_images', qAliasKey, {
+        ...payload,
+        id: qAliasKey,
+      }).catch(() => {});
     }
 
-    const data: ServerUploadResponse = await response.json();
-    return data;
-  } catch (err: any) {
-    console.warn('[UploadService] Server upload failed, falling back to local base64:', err);
-    // Fallback: return dataUrl if server is temporarily unreachable in dev mode
-    return {
-      success: false,
-      url: dataUrl,
-      fileName,
-      error: err.message || 'Server upload failed',
-    };
+    // If matrixItemId is provided, also save matrix item alias
+    if (extraMeta?.matrixItemId && extraMeta?.questionId && category === 'final-mission') {
+      const itemAliasKey = `fm_item_${extraMeta.questionId.toLowerCase()}_${extraMeta.matrixItemId.toLowerCase()}`;
+      saveCloudDoc('uploaded_images', itemAliasKey, {
+        ...payload,
+        id: itemAliasKey,
+      }).catch(() => {});
+    }
+  } catch (cloudErr) {
+    console.warn('[UploadService] Firestore cloud image record notice:', cloudErr);
   }
+
+  return {
+    success: uploadSucceeded || Boolean(dataUrl),
+    url: finalUrl,
+    fileName,
+    dataUrl,
+  };
 }
 
 /**

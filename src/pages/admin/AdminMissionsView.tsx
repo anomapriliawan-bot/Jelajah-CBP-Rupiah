@@ -31,6 +31,7 @@ import {
   HelpCircle,
   Lightbulb,
   ShieldCheck,
+  CloudDownload,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Mission, ContentStatus, Badge } from '../../types';
@@ -42,6 +43,9 @@ import { WorkflowActionModal } from '../../components/admin/WorkflowActionModal'
 import { StudentPreviewModal } from '../../components/admin/StudentPreviewModal';
 import { QuickExcelImportModal } from '../../components/admin/QuickExcelImportModal';
 import { ComprehensiveMissionModal } from '../../components/admin/ComprehensiveMissionModal';
+import { BatchImageUploadModal } from '../../components/admin/BatchImageUploadModal';
+import { getImageFromStore } from '../../services/imageStore';
+import { resolveMissionImage, normalizeImageUrl } from '../../utils/imageHelper';
 
 export const AdminMissionsView: React.FC = () => {
   const [missions, setMissions] = useState<Mission[]>(
@@ -56,6 +60,7 @@ export const AdminMissionsView: React.FC = () => {
 
   // Modals & Drawers States
   const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
+  const [isBatchImageOpen, setIsBatchImageOpen] = useState(false);
   const [comprehensiveMission, setComprehensiveMission] = useState<Mission | null>(null);
   const [isComprehensiveOpen, setIsComprehensiveOpen] = useState(false);
 
@@ -67,6 +72,7 @@ export const AdminMissionsView: React.FC = () => {
   const [confirmDeactivateAll, setConfirmDeactivateAll] = useState(false);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [isPersistingDefault, setIsPersistingDefault] = useState(false);
+  const [isPullingCloud, setIsPullingCloud] = useState(false);
 
   // Toast feedback
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' } | null>(null);
@@ -92,29 +98,8 @@ export const AdminMissionsView: React.FC = () => {
         return;
       }
 
-      const payload = {
-        missions: currentMissions,
-        lessons: db.getLessons(),
-        activities: db.getActivities(),
-        practiceQuestions: db.getPracticeQuestions(),
-        badges: db.getBadges(),
-        reflections: db.getReflections(),
-        references: db.getReferences(),
-        tournamentPackages: db.getTournamentPackages(),
-        tournamentQuestions: db.getTournamentQuestions(),
-        tournamentEvents: db.getTournamentEvents(),
-      };
-
-      // 1. Simpan langsung ke memori lokal peramban agar instan
-      localStorage.setItem('jr_db_custom_default_master', JSON.stringify(payload));
-
-      // 2. Kirim ke backend server agar tersimpan permanen di file server
-      const res = await fetch('/api/set-system-default', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await res.json();
+      const currentUser = db.getCurrentUser();
+      const res = await db.persistSystemDefaultMaster(currentUser?.name || 'Admin Kurikulum BI');
 
       sounds.playFanfare();
       confetti({
@@ -123,20 +108,41 @@ export const AdminMissionsView: React.FC = () => {
         origin: { y: 0.6 },
       });
 
-      if (result.success) {
-        showToast(
-          `✨ Berhasil! ${result.missionsCount || currentMissions.length} Misi baru telah dipermanenkan sebagai default sistem!`
-        );
+      let successText = '';
+      if (res.cloudSynced) {
+        successText = `✨ Berhasil! ${res.missionsCount} Misi dan ${res.lessonsCount || 56} Slide Materi telah dipermanenkan ke Cloud Firestore & Disk Server. Seluruh perangkat siswa dan browser lain akan langsung tersinkronisasi otomatis!`;
+      } else if (res.serverDiskSaved) {
+        successText = `✨ Berhasil! ${res.missionsCount} Misi dan ${res.lessonsCount || 56} Slide Materi telah tersimpan permanen di Disk Server (customDefaultMaster.json) dan Memori Sistem. Aman untuk digunakan sebagai kurikulum default!`;
       } else {
-        showToast(
-          `✨ Data misi berhasil disimpan di memori browser sebagai default sistem!`,
-          'success'
-        );
+        successText = `✨ Berhasil! ${res.missionsCount} Misi dan kurikulum telah dipermanenkan di Penyimpanan Memori Sistem.`;
       }
+
+      setUploadSuccessModalMsg(successText);
+      showToast(successText, 'success');
     } catch (err: any) {
-      showToast('Data misi berhasil disimpan di memori lokal peramban.', 'info');
+      console.error('Error persisting system default:', err);
+      const warnMsg = 'Peringatan: Gagal tersambung ke Cloud. Data misi berhasil disimpan di memori lokal peramban ini.';
+      setUploadSuccessModalMsg(warnMsg);
+      showToast(warnMsg, 'info');
     } finally {
       setIsPersistingDefault(false);
+    }
+  };
+
+  const handlePullFromCloud = async () => {
+    try {
+      setIsPullingCloud(true);
+      sounds.playPop();
+      const res = await db.pullSystemDefaultFromCloud();
+      refreshData();
+      setUploadSuccessModalMsg(res.message);
+      showToast(res.message, res.success ? 'success' : 'info');
+    } catch (err: any) {
+      const errMsg = 'Gagal menarik dari cloud: ' + (err?.message || 'Koneksi terputus');
+      setUploadSuccessModalMsg(errMsg);
+      showToast(errMsg, 'info');
+    } finally {
+      setIsPullingCloud(false);
     }
   };
 
@@ -365,15 +371,39 @@ export const AdminMissionsView: React.FC = () => {
             <span>Upload Excel Master</span>
           </button>
 
+          {/* UNGGAH GAMBAR MASSAL (BATCH) BUTTON */}
+          <button
+            onClick={() => {
+              sounds.playPop();
+              setIsBatchImageOpen(true);
+            }}
+            className="px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white rounded-2xl text-xs font-bold shadow-md shadow-teal-600/20 flex items-center gap-2 transition-all hover:scale-102 cursor-pointer"
+            title="Unggah cover misi dan foto materi secara massal (otomatis dipasangkan berdasarkan nama file)"
+          >
+            <ImageIcon className="w-4 h-4 text-teal-200" />
+            <span>Unggah Gambar Massal</span>
+          </button>
+
           {/* PERMANENKAN SEBAGAI DEFAULT SISTEM BUTTON */}
           <button
             onClick={handleMakeSystemDefault}
             disabled={isPersistingDefault}
             className="px-4 py-2.5 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-orange-700 text-white rounded-2xl text-xs font-black shadow-md shadow-amber-500/25 flex items-center gap-2 transition-all hover:scale-102 cursor-pointer disabled:opacity-60"
-            title="Kunci dan jadikan seluruh data misi yang aktif saat ini sebagai default permanen sistem"
+            title="Kunci dan jadikan seluruh data misi yang aktif saat ini sebagai default permanen sistem ke Firebase Cloud"
           >
             <ShieldCheck className="w-4 h-4 text-amber-100" />
-            <span>{isPersistingDefault ? 'Menyimpan...' : 'Permanenkan Sebagai Default'}</span>
+            <span>{isPersistingDefault ? 'Menyimpan ke Cloud...' : 'Permanenkan Sebagai Default'}</span>
+          </button>
+
+          {/* SINKRON / TARIK DARI CLOUD BUTTON */}
+          <button
+            onClick={handlePullFromCloud}
+            disabled={isPullingCloud}
+            className="px-3.5 py-2.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-2xl text-xs font-bold border border-sky-200 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+            title="Tarik data misi default terbaru dari Firebase Cloud Firestore"
+          >
+            <CloudDownload className={`w-3.5 h-3.5 text-sky-600 ${isPullingCloud ? 'animate-bounce' : ''}`} />
+            <span>{isPullingCloud ? 'Menarik...' : 'Tarik dari Cloud'}</span>
           </button>
 
           {/* DOWNLOAD TEMPLATE EXCEL */}
@@ -659,18 +689,44 @@ export const AdminMissionsView: React.FC = () => {
                   </div>
 
                   <div className="flex items-start sm:items-center gap-3.5">
-                    {/* Cover Thumbnail */}
-                    <div className="w-16 h-12 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
-                      {m.imageUrl || (m as any).openingImageUrl ? (
-                        <img
-                          src={m.imageUrl || (m as any).openingImageUrl}
-                          alt={m.title}
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <ImageIcon className="w-5 h-5 text-slate-300" />
-                      )}
+                    {/* Cover Thumbnail with Multi-tier Smart Fallback */}
+                    <div className="w-16 h-12 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative shadow-2xs">
+                      {(() => {
+                        const coverImg = resolveMissionImage(m, allLessons);
+                        if (coverImg) {
+                          return (
+                            <img
+                              src={coverImg}
+                              alt={m.title}
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                const fallback = getImageFromStore([m.id, `cbr_img_${m.id}`, m.code]);
+                                if (fallback && e.currentTarget.src !== fallback) {
+                                  e.currentTarget.src = fallback;
+                                } else {
+                                  // Hide broken image icon, fallback to styled badge
+                                  e.currentTarget.style.display = 'none';
+                                }
+                              }}
+                            />
+                          );
+                        }
+                        return (
+                          <div
+                            className={`w-full h-full flex flex-col items-center justify-center font-black text-[10px] ${
+                              m.worldId === 'cinta'
+                                ? 'bg-gradient-to-br from-rose-50 to-rose-100 text-rose-600'
+                                : m.worldId === 'bangga'
+                                ? 'bg-gradient-to-br from-cyan-50 to-blue-100 text-cyan-700'
+                                : 'bg-gradient-to-br from-amber-50 to-emerald-100 text-emerald-700'
+                            }`}
+                          >
+                            <ImageIcon className="w-4 h-4 mb-0.5 opacity-80" />
+                            <span className="text-[9px] uppercase tracking-wider">{m.code || 'MISI'}</span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -798,6 +854,18 @@ export const AdminMissionsView: React.FC = () => {
           refreshData();
           showToast(msg);
           setUploadSuccessModalMsg(msg);
+        }}
+      />
+
+      {/* BATCH IMAGE UPLOAD MODAL */}
+      <BatchImageUploadModal
+        isOpen={isBatchImageOpen}
+        onClose={() => setIsBatchImageOpen(false)}
+        lessons={allLessons}
+        missions={missions}
+        onSuccess={(count) => {
+          refreshData();
+          showToast(`Berhasil menyimpan dan memasangkan ${count} gambar ke materi & misi!`);
         }}
       />
 

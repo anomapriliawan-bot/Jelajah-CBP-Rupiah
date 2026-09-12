@@ -64,7 +64,8 @@ async function startServer() {
       // Write physical file to server disk
       await fs.promises.writeFile(targetFilePath, buffer);
 
-      const publicUrl = `/images/${cleanCategory}/${finalFileName}`;
+      const timestamp = Date.now();
+      const publicUrl = `/images/${cleanCategory}/${finalFileName}?t=${timestamp}`;
       console.log(`[Upload Server] Saved file: ${finalFileName} (${buffer.length} bytes) -> ${publicUrl}`);
 
       return res.json({
@@ -118,12 +119,32 @@ async function startServer() {
       const targetPath = path.join(process.cwd(), 'src', 'data', 'customDefaultMaster.json');
       await fs.promises.writeFile(targetPath, JSON.stringify(data, null, 2), 'utf-8');
 
+      // Also persist finalMissionQuestions if included in payload
+      if (Array.isArray(data.finalMissionQuestions) && data.finalMissionQuestions.length > 0) {
+        const fmPath = path.join(process.cwd(), 'src', 'data', 'customFinalMissionQuestions.json');
+        await fs.promises.writeFile(
+          fmPath,
+          JSON.stringify(
+            {
+              updatedAt: new Date().toISOString(),
+              author: data.updatedBy || 'Super Admin',
+              count: data.finalMissionQuestions.length,
+              questions: data.finalMissionQuestions,
+            },
+            null,
+            2
+          ),
+          'utf-8'
+        );
+      }
+
       console.log(`[System Default] Sukses menyimpan ${data.missions.length} misi sebagai default permanen sistem.`);
       return res.json({
         success: true,
         missionsCount: data.missions.length,
         lessonsCount: data.lessons?.length || 0,
         questionsCount: data.practiceQuestions?.length || 0,
+        finalMissionQuestionsCount: data.finalMissionQuestions?.length || 0,
       });
     } catch (err: any) {
       console.error('[System Default Error]', err);
@@ -135,6 +156,55 @@ async function startServer() {
   app.get('/api/system-default', async (_req: Request, res: Response) => {
     try {
       const targetPath = path.join(process.cwd(), 'src', 'data', 'customDefaultMaster.json');
+      if (fs.existsSync(targetPath)) {
+        const content = await fs.promises.readFile(targetPath, 'utf-8');
+        return res.json(JSON.parse(content));
+      }
+      return res.json(null);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Permanently save Final Mission questions & images metadata to server disk
+  app.post('/api/final-mission-questions', async (req: Request, res: Response) => {
+    try {
+      const data = req.body;
+      const questions = Array.isArray(data) ? data : data?.questions;
+      if (!questions || !Array.isArray(questions)) {
+        return res.status(400).json({ error: 'Data payload tidak valid (wajib menyertakan array questions)' });
+      }
+
+      const targetDir = path.join(process.cwd(), 'src', 'data');
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const targetPath = path.join(targetDir, 'customFinalMissionQuestions.json');
+      const payload = {
+        updatedAt: new Date().toISOString(),
+        author: data?.author || 'Super Admin',
+        count: questions.length,
+        questions,
+      };
+
+      await fs.promises.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+      console.log(`[Final Mission Disk] Sukses menyimpan ${questions.length} butir soal ke disk server (${targetPath}).`);
+      return res.json({
+        success: true,
+        count: questions.length,
+        updatedAt: payload.updatedAt,
+      });
+    } catch (err: any) {
+      console.error('[Final Mission Save Error]', err);
+      return res.status(500).json({ error: err.message || 'Gagal menyimpan soal misi akhir ke file server' });
+    }
+  });
+
+  // Get current Final Mission questions from server disk
+  app.get('/api/final-mission-questions', async (_req: Request, res: Response) => {
+    try {
+      const targetPath = path.join(process.cwd(), 'src', 'data', 'customFinalMissionQuestions.json');
       if (fs.existsSync(targetPath)) {
         const content = await fs.promises.readFile(targetPath, 'utf-8');
         return res.json(JSON.parse(content));
