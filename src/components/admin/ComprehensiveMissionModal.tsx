@@ -254,7 +254,7 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
   };
 
   // --- SAVE MISSION INFO ---
-  const handleSaveMissionInfo = (e?: React.FormEvent) => {
+  const handleSaveMissionInfo = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     sounds.playPop();
 
@@ -291,10 +291,12 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
         'Admin Kurikulum BI',
         `Pembaruan lengkap misi ${infoForm.code}: ${infoForm.title}`
       );
-      onSaved(`Misi "${infoForm.code}: ${infoForm.title}" berhasil diperbarui!`);
+      await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+      onSaved(`Misi "${infoForm.code}: ${infoForm.title}" berhasil diperbarui & disinkronkan ke seluruh siswa!`);
     } else {
       db.createMission(payload as Omit<Mission, 'id'>);
-      onSaved(`Misi baru "${infoForm.code}: ${infoForm.title}" berhasil dibuat!`);
+      await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+      onSaved(`Misi baru "${infoForm.code}: ${infoForm.title}" berhasil dibuat & disinkronkan ke seluruh siswa!`);
     }
   };
 
@@ -330,7 +332,7 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
     });
   };
 
-  const handleSaveLesson = () => {
+  const handleSaveLesson = async () => {
     if (!lessonForm.title || !lessonForm.studentText) {
       alert('Mohon lengkapi Judul Slide dan Isi Teks Materi.');
       return;
@@ -361,10 +363,11 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
     setLessons(fresh);
     setEditingLessonId(null);
     setLessonForm({});
-    onSaved('Materi slide berhasil disimpan!');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    onSaved('Materi slide berhasil disimpan & disinkronkan ke seluruh pengguna!');
   };
 
-  const handleDeleteLesson = (id: string) => {
+  const handleDeleteLesson = async (id: string) => {
     if (confirm('Hapus slide materi ini?')) {
       sounds.playPop();
       db.deleteLesson(id);
@@ -373,7 +376,8 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
       if (editingLessonId === id) {
         setEditingLessonId(null);
       }
-      onSaved('Slide materi dihapus.');
+      await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+      onSaved('Slide materi dihapus & disinkronkan.');
     }
   };
 
@@ -474,7 +478,7 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
     });
   };
 
-  const handleSaveQuestion = () => {
+  const handleSaveQuestion = async () => {
     if (!questionForm.question) {
       alert('Mohon isi teks pertanyaan soal.');
       return;
@@ -500,10 +504,11 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
     setQuestions(fresh);
     setEditingQuestionId(null);
     setQuestionForm({});
-    onSaved('Soal latihan berhasil disimpan!');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    onSaved('Soal latihan berhasil disimpan & disinkronkan ke seluruh siswa!');
   };
 
-  const handleDeleteQuestion = (id: string) => {
+  const handleDeleteQuestion = async (id: string) => {
     if (confirm('Hapus butir soal ini?')) {
       sounds.playPop();
       db.deletePracticeQuestion(id);
@@ -512,12 +517,13 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
       if (editingQuestionId === id) {
         setEditingQuestionId(null);
       }
-      onSaved('Soal latihan dihapus.');
+      await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+      onSaved('Soal latihan dihapus & disinkronkan.');
     }
   };
 
   // --- SAVE REFLECTION ---
-  const handleSaveReflection = () => {
+  const handleSaveReflection = async () => {
     sounds.playPop();
     const missionId = mission ? normalizeMissionId(mission.id || mission.code) : infoForm.code;
     const guides = reflectionForm.guideQuestions
@@ -546,7 +552,8 @@ export const ComprehensiveMissionModal: React.FC<ComprehensiveMissionModalProps>
 
     const freshRefl = db.getReflectionByMission(missionId);
     if (freshRefl) setReflection(freshRefl);
-    onSaved('Data refleksi misi berhasil disimpan!');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    onSaved('Data refleksi misi berhasil disimpan & disinkronkan!');
   };
 
   return (

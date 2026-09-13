@@ -65,20 +65,22 @@ export const AdminQuestionsView: React.FC = () => {
     return unsub;
   }, []);
 
-  const handleDeleteAll = () => {
+  const handleDeleteAll = async () => {
     sounds.playPop();
     db.deleteAllPracticeQuestions();
     refreshData();
     setConfirmDeleteAll(false);
-    showToast('Seluruh bank soal latihan berhasil dikosongkan.', 'info');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('Seluruh bank soal latihan berhasil dikosongkan dan disinkronkan ke semua pengguna.', 'info');
   };
 
-  const handleResetDefault = () => {
+  const handleResetDefault = async () => {
     sounds.playFanfare();
     db.resetPracticeQuestionsToDefault();
     refreshData();
     setConfirmResetDefault(false);
-    showToast('✨ 110 Butir Soal Latihan Standar BI berhasil dipulihkan!');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('✨ 110 Butir Soal Latihan Standar BI berhasil dipulihkan dan disinkronkan ke semua pengguna!');
   };
 
   // Form State
@@ -170,7 +172,7 @@ export const AdminQuestionsView: React.FC = () => {
     setIsCreateOpen(true);
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const options = [formData.optionA, formData.optionB, formData.optionC, formData.optionD].filter(Boolean);
@@ -207,12 +209,16 @@ export const AdminQuestionsView: React.FC = () => {
     refreshData();
     setIsCreateOpen(false);
     setEditingQuestion(null);
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast(`Soal ${formData.code} (Poin: ${formData.points}) berhasil disimpan dan disinkronkan ke semua pengguna!`);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     db.deletePracticeQuestion(id);
     refreshData();
     setConfirmDeleteId(null);
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast(`Soal ${id} berhasil dihapus dan disinkronkan ke semua pengguna.`, 'info');
   };
 
   const filteredQuestions = questions.filter((q) => {

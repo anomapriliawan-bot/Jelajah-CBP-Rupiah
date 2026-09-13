@@ -173,9 +173,10 @@ export const AdminLessonsView: React.FC = () => {
         `Update gambar kartu ${cardNumber}: ${lesson.title}`
       );
 
+      await db.persistSystemDefaultMaster('Admin Kurikulum');
       refreshData();
       sounds.playSuccess();
-      showToast(`Gambar Kartu ${cardNumber} berhasil disimpan permanen di sistem!`);
+      showToast(`Gambar Kartu ${cardNumber} berhasil disimpan permanen di sistem & disinkronkan!`);
     } catch (err) {
       console.error('Error uploading image:', err);
       showToast('Gagal mengunggah gambar. Silakan coba lagi.', 'info');
@@ -218,8 +219,9 @@ export const AdminLessonsView: React.FC = () => {
       `Hapus gambar kartu ${cardNumber}: ${lesson.title}`
     );
 
+    await db.persistSystemDefaultMaster('Admin Kurikulum');
     refreshData();
-    showToast(`Gambar Kartu ${cardNumber} dihapus.`, 'info');
+    showToast(`Gambar Kartu ${cardNumber} dihapus & disinkronkan.`, 'info');
   };
 
   const handleOpenCreate = () => {
@@ -352,7 +354,7 @@ export const AdminLessonsView: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const sections = [];
@@ -389,22 +391,24 @@ export const AdminLessonsView: React.FC = () => {
         'Admin Kurikulum BI',
         `Pembaruan materi ${formData.code}: ${formData.title}`
       );
-      showToast(`Materi "${formData.title}" berhasil diperbarui!`);
+      showToast(`Materi "${formData.title}" berhasil diperbarui & disinkronkan!`);
     } else {
       db.createLesson(payload as Omit<Lesson, 'id'>);
-      showToast(`Materi baru "${formData.title}" berhasil dibuat!`);
+      showToast(`Materi baru "${formData.title}" berhasil dibuat & disinkronkan!`);
     }
 
     refreshData();
     setIsCreateOpen(false);
     setEditingLesson(null);
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     db.deleteLesson(id);
     refreshData();
     setConfirmDeleteId(null);
-    showToast('Materi berhasil dihapus.', 'info');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('Materi berhasil dihapus & disinkronkan ke semua pengguna.', 'info');
   };
 
   // Filtered Lessons

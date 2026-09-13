@@ -180,7 +180,7 @@ export const AdminMissionsView: React.FC = () => {
   });
 
   // Reorder Mission
-  const handleMoveOrder = (index: number, direction: 'up' | 'down') => {
+  const handleMoveOrder = async (index: number, direction: 'up' | 'down') => {
     sounds.playPop();
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= missions.length) return;
@@ -197,11 +197,12 @@ export const AdminMissionsView: React.FC = () => {
     });
 
     setMissions(newMissions);
-    showToast(`Urutan misi berhasil diperbarui.`);
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast(`Urutan misi berhasil diperbarui & disinkronkan ke seluruh pengguna.`);
   };
 
   // Quick Toggle Status
-  const handleToggleStatus = (m: Mission) => {
+  const handleToggleStatus = async (m: Mission) => {
     sounds.playPop();
     const newStatus: ContentStatus = m.status === 'published' ? 'draft' : 'published';
     db.updateMissionStatus(m.id, newStatus, {
@@ -210,13 +211,14 @@ export const AdminMissionsView: React.FC = () => {
       notes: `Status diubah ke ${newStatus}`,
     });
     refreshData();
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
     showToast(
-      `Status "${m.code}" diubah ke ${newStatus === 'published' ? 'AKTIF (Published)' : 'DRAFT'}.`
+      `Status "${m.code}" diubah ke ${newStatus === 'published' ? 'AKTIF (Published)' : 'DRAFT'} & disinkronkan ke semua pengguna.`
     );
   };
 
   // Activate All
-  const handleActivateAll = () => {
+  const handleActivateAll = async () => {
     sounds.playFanfare();
     const all = db.getMissions();
     all.forEach((m) => {
@@ -227,11 +229,12 @@ export const AdminMissionsView: React.FC = () => {
       });
     });
     refreshData();
-    showToast('🎉 Semua 9 Misi berhasil diaktifkan ke status Published!');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('🎉 Semua 9 Misi berhasil diaktifkan ke status Published & disinkronkan!');
   };
 
   // Deactivate All
-  const handleDeactivateAll = () => {
+  const handleDeactivateAll = async () => {
     sounds.playPop();
     const all = db.getMissions();
     all.forEach((m) => {
@@ -243,16 +246,18 @@ export const AdminMissionsView: React.FC = () => {
     });
     refreshData();
     setConfirmDeactivateAll(false);
-    showToast('Semua misi telah diubah ke status Draft.', 'info');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('Semua misi telah diubah ke status Draft & disinkronkan.', 'info');
   };
 
   // Delete Mission
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     sounds.playPop();
     db.deleteMission(id);
     refreshData();
     setConfirmDeleteId(null);
-    showToast('Misi berhasil dihapus dari database.');
+    await db.persistSystemDefaultMaster('Admin Kurikulum BI');
+    showToast('Misi berhasil dihapus dari database & disinkronkan.');
   };
 
   // Download Excel Template

@@ -622,6 +622,34 @@ class DatabaseService {
     }
   }
 
+  private autoPersistSystemDefaultTimer: any = null;
+  public scheduleAutoPersistSystemDefaultMaster(author: string = 'Super Admin') {
+    if (typeof window === 'undefined') return;
+    if (this.autoPersistSystemDefaultTimer) {
+      clearTimeout(this.autoPersistSystemDefaultTimer);
+    }
+    this.autoPersistSystemDefaultTimer = setTimeout(() => {
+      this.autoPersistSystemDefaultTimer = null;
+      this.persistSystemDefaultMaster(author).catch((err) => {
+        console.warn('[AutoPersist] System default error:', err);
+      });
+    }, 450);
+  }
+
+  private autoPersistFinalMissionTimer: any = null;
+  public scheduleAutoPersistFinalMissionMaster(author: string = 'Super Admin') {
+    if (typeof window === 'undefined') return;
+    if (this.autoPersistFinalMissionTimer) {
+      clearTimeout(this.autoPersistFinalMissionTimer);
+    }
+    this.autoPersistFinalMissionTimer = setTimeout(() => {
+      this.autoPersistFinalMissionTimer = null;
+      this.persistFinalMissionMaster(author).catch((err) => {
+        console.warn('[AutoPersist] Final mission error:', err);
+      });
+    }, 450);
+  }
+
   private scheduleCloudPush(key: string, data: any) {
     if (typeof window === 'undefined') return;
     try {
@@ -639,6 +667,7 @@ class DatabaseService {
             }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.LESSONS && Array.isArray(data)) {
         data.forEach((l: any) => {
           if (l && (l.id || l.code)) {
@@ -650,6 +679,7 @@ class DatabaseService {
             }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.ACTIVITIES && Array.isArray(data)) {
         data.forEach((a: any) => {
           if (a && (a.id || a.code)) {
@@ -657,6 +687,7 @@ class DatabaseService {
             saveCloudDoc('activities', docId, { ...a, _updatedAt: new Date().toISOString() }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.PRACTICE_QUESTIONS && Array.isArray(data)) {
         data.forEach((q: any) => {
           if (q && (q.id || q.code)) {
@@ -664,6 +695,7 @@ class DatabaseService {
             saveCloudDoc('practice_questions', docId, { ...q, _updatedAt: new Date().toISOString() }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.BADGES && Array.isArray(data)) {
         data.forEach((b: any) => {
           if (b && b.id) {
@@ -671,6 +703,7 @@ class DatabaseService {
             saveCloudDoc('badges', docId, { ...b, _updatedAt: new Date().toISOString() }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.REFLECTIONS && Array.isArray(data)) {
         data.forEach((r: any) => {
           if (r && (r.id || r.missionId)) {
@@ -678,6 +711,7 @@ class DatabaseService {
             saveCloudDoc('reflections', docId, { ...r, _updatedAt: new Date().toISOString() }).catch(() => {});
           }
         });
+        this.scheduleAutoPersistSystemDefaultMaster();
       } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
         data.forEach((u: any) => {
           if (u && u.id) saveCloudDoc('users', u.id, u).catch(() => {});
@@ -696,6 +730,7 @@ class DatabaseService {
         });
       } else if (key === STORAGE_KEYS.FINAL_MISSION_QUESTIONS && Array.isArray(data)) {
         this.pushFinalMissionQuestionsToCloud(data);
+        this.scheduleAutoPersistFinalMissionMaster();
       } else if (key === STORAGE_KEYS.CLASSES && Array.isArray(data)) {
         data.forEach((c: any) => {
           if (c && c.id) saveCloudDoc('classes', c.id, c).catch(() => {});
@@ -727,10 +762,13 @@ class DatabaseService {
                 const localMaster = localMasterRaw ? JSON.parse(localMasterRaw) : null;
                 const cloudUpdated = cloudMaster.updatedAt || '';
                 const localUpdated = localMaster?.updatedAt || '';
+                const cloudVersion = String(cloudMaster.version || cloudUpdated || '');
+                const localVersion = localStorage.getItem('jr_db_system_default_version') || '';
 
-                if (!localMaster || cloudUpdated !== localUpdated) {
+                if (!localMaster || cloudUpdated !== localUpdated || cloudVersion !== localVersion) {
                   console.log('[Firebase] Detected newer System Default Master from Cloud, applying to system...');
                   localStorage.setItem('jr_db_custom_default_master', JSON.stringify(cloudMaster));
+                  localStorage.setItem('jr_db_system_default_version', cloudVersion);
 
                   this.isCloudSyncing = true;
                   const sortedMissions = [...cloudMaster.missions].sort((a: any, b: any) => (a.orderIndex || 0) - (b.orderIndex || 0));
@@ -899,6 +937,44 @@ class DatabaseService {
           }
         }
 
+        // 3b. Real-time listener for Practice Questions (syncs questions, options, explanation, points across devices)
+        try {
+          const questionsCollRef = collection(firestore, 'practice_questions');
+          onSnapshot(questionsCollRef, (snapshot) => {
+            if (!snapshot.empty) {
+              const cloudQuestions: PracticeQuestion[] = [];
+              snapshot.forEach((d) => {
+                cloudQuestions.push(d.data() as PracticeQuestion);
+              });
+              if (cloudQuestions.length > 0) {
+                const localQuestions = this.getStorage<PracticeQuestion>(STORAGE_KEYS.PRACTICE_QUESTIONS, []);
+                const questionMap = new Map<string, PracticeQuestion>();
+                localQuestions.forEach((q) => questionMap.set(q.id || q.code, q));
+                cloudQuestions.forEach((cq) => {
+                  const key = cq.id || cq.code;
+                  const existing = questionMap.get(key);
+                  questionMap.set(key, existing ? { ...existing, ...cq } : cq);
+                });
+                this.isCloudSyncing = true;
+                this.setStorage(STORAGE_KEYS.PRACTICE_QUESTIONS, Array.from(questionMap.values()));
+                this.isCloudSyncing = false;
+                this.notify();
+              }
+            } else {
+              const initialQuestions = this.getStorage<PracticeQuestion>(STORAGE_KEYS.PRACTICE_QUESTIONS, seedPracticeQuestions);
+              seedCloudIfEmpty('practice_questions', initialQuestions, 'id');
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Practice questions listener notice:', err?.message || err);
+            }
+          });
+        } catch (qErr: any) {
+          if (qErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Practice questions snapshot notice:', qErr);
+          }
+        }
+
         // 4. Real-time listener for Uploaded Images (syncs uploaded pictures to local cache)
         try {
           const uploadedImagesCollRef = collection(firestore, 'uploaded_images');
@@ -941,22 +1017,10 @@ class DatabaseService {
             if (snapshot.exists()) {
               const cloudMaster = snapshot.data() as any;
               const cloudUpdated = cloudMaster?.updatedAt || '';
-              const localSavedAt =
-                (typeof window !== 'undefined' ? localStorage.getItem('jr_db_final_mission_last_saved_at') : null) ||
-                this.finalMissionLastSavedAt ||
-                '';
-
               const localQuestions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
 
-              // KASUS 1: Data lokal lebih baru daripada cloud -> JANGAN timpa lokal! Sebaliknya, unggah data lokal ke cloud
-              if (localSavedAt && cloudUpdated && localSavedAt > cloudUpdated && localQuestions.length > 0) {
-                console.log(`[Firebase] Data Misi Akhir lokal (${localSavedAt}) lebih baru daripada Cloud (${cloudUpdated}). Menjaga data lokal dan mengunggah ke Cloud...`);
-                this.persistFinalMissionMaster('Super Admin', localQuestions).catch(() => {});
-                return;
-              }
-
-              // KASUS 2: Cloud lebih baru daripada lokal, atau belum pernah disimpan lokal, atau lokal kosong
-              if (cloudUpdated && (!localSavedAt || cloudUpdated >= localSavedAt || localQuestions.length === 0)) {
+              // Trigger update whenever Cloud timestamp is different from our active loaded timestamp, or if local is empty
+              if (cloudUpdated && (cloudUpdated !== this.finalMissionLastSavedAt || localQuestions.length === 0)) {
                 let cloudQuestions: FinalMissionQuestion[] = [];
                 // UTAMAKAN dokumen partisi resmi Cloud (settings/final_mission_anak, remaja, dewasa)
                 try {
@@ -1069,8 +1133,36 @@ class DatabaseService {
       })
       .catch(() => {});
 
-    // 2b. Check server disk for permanently saved Final Mission questions (multi-device & multi-account sync)
+    // 2a. Check server disk for permanently saved System Default master (9 Misi, Lessons, Practice Questions)
     if (typeof window !== 'undefined') {
+      fetch('/api/system-default')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((sysDefault) => {
+          if (sysDefault && sysDefault.missions && Array.isArray(sysDefault.missions) && sysDefault.missions.length > 0) {
+            this.isCloudSyncing = true;
+            this.setStorage(STORAGE_KEYS.MISSIONS, sysDefault.missions);
+            if (sysDefault.lessons && Array.isArray(sysDefault.lessons) && sysDefault.lessons.length > 0) {
+              this.setStorage(STORAGE_KEYS.LESSONS, sysDefault.lessons);
+            }
+            if (sysDefault.practiceQuestions && Array.isArray(sysDefault.practiceQuestions) && sysDefault.practiceQuestions.length > 0) {
+              this.setStorage(STORAGE_KEYS.PRACTICE_QUESTIONS, sysDefault.practiceQuestions);
+            }
+            if (sysDefault.activities && Array.isArray(sysDefault.activities) && sysDefault.activities.length > 0) {
+              this.setStorage(STORAGE_KEYS.ACTIVITIES, sysDefault.activities);
+            }
+            if (sysDefault.badges && Array.isArray(sysDefault.badges) && sysDefault.badges.length > 0) {
+              this.setStorage(STORAGE_KEYS.BADGES, sysDefault.badges);
+            }
+            if (sysDefault.reflections && Array.isArray(sysDefault.reflections) && sysDefault.reflections.length > 0) {
+              this.setStorage(STORAGE_KEYS.REFLECTIONS, sysDefault.reflections);
+            }
+            this.isCloudSyncing = false;
+            this.notify();
+          }
+        })
+        .catch(() => {});
+
+      // 2b. Check server disk for permanently saved Final Mission questions (multi-device & multi-account sync)
       fetch('/api/final-mission-questions')
         .then((res) => (res.ok ? res.json() : null))
         .then((diskData) => {
@@ -4280,6 +4372,8 @@ class DatabaseService {
       await Promise.race([
         (async () => {
           // a. Simpan ringkasan master ke settings/system_default (ringan tanpa blob)
+          // a. Simpan master lengkap ke settings/system_default
+          const cleanLessonsForCloud = this.sanitizeLessonsForStorage(currentLessons);
           const summaryPayload = {
             id: 'system_default',
             updatedAt: new Date().toISOString(),
@@ -4288,6 +4382,13 @@ class DatabaseService {
             missionsCount: currentMissions.length,
             lessonsCount: currentLessons.length,
             badgesCount: currentBadges.length,
+            practiceQuestionsCount: currentPractice.length,
+            missions: currentMissions,
+            lessons: cleanLessonsForCloud,
+            practiceQuestions: currentPractice,
+            activities: currentActivities,
+            badges: currentBadges,
+            reflections: currentReflections,
             serverDiskSaved,
           };
           await saveCloudDoc('settings', 'system_default', summaryPayload);
@@ -4317,6 +4418,21 @@ class DatabaseService {
             });
           if (lessonDocs.length > 0) {
             await batchSaveCloudDocs('lessons', lessonDocs);
+          }
+
+          // c2. Simpan semua soal latihan (practice_questions) secara batch atomic
+          const questionDocs = currentPractice
+            .filter((q) => q && (q.id || q.code))
+            .map((q) => {
+              const docId = String(q.id || q.code).replace(/[^a-zA-Z0-9_-]/g, '_');
+              return {
+                ...q,
+                id: docId,
+                _updatedAt: new Date().toISOString(),
+              };
+            });
+          if (questionDocs.length > 0) {
+            await batchSaveCloudDocs('practice_questions', questionDocs);
           }
 
           // d. Simpan master Misi Akhir ke settings/final_mission_master
@@ -4808,6 +4924,13 @@ class DatabaseService {
     if (filtered.length === list.length) return false;
     this.setStorage(STORAGE_KEYS.LESSONS, filtered);
     this.notify();
+
+    try {
+      const docId = String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      deleteCloudDoc('lessons', docId).catch(() => {});
+    } catch {
+      // ignore
+    }
     return true;
   }
 
@@ -5108,6 +5231,14 @@ class DatabaseService {
     const filtered = list.filter((q) => q.id !== id && q.code !== id);
     if (filtered.length === list.length) return false;
     this.setStorage(STORAGE_KEYS.PRACTICE_QUESTIONS, filtered);
+    this.notify();
+
+    try {
+      const docId = String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      deleteCloudDoc('practice_questions', docId).catch(() => {});
+    } catch {
+      // ignore
+    }
     return true;
   }
 
@@ -5623,6 +5754,11 @@ class DatabaseService {
     const updated = this.sortQuestionsNaturally(questions.filter((q) => q.id !== id));
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, updated);
     this.persistFinalMissionMaster('Super Admin', updated).catch(() => {});
+    try {
+      deleteCloudDoc('final_mission_questions', id).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 
   public async deleteFinalMissionQuestionAsync(id: string): Promise<void> {
