@@ -80,6 +80,7 @@ import { getDefaultQ38ItemImage } from '../data/q38Assets';
 import { normalizeImageUrl } from '../utils/imageHelper';
 import {
   saveCloudDoc,
+  getCloudDoc,
   batchSaveCloudDocs,
   deleteCloudDoc,
   getCloudCollection,
@@ -936,18 +937,55 @@ class DatabaseService {
         // 4b. Real-time listener for Final Mission Master Questions & Images from Cloud
         try {
           const fmDocRef = doc(firestore, 'settings', 'final_mission_master');
-          onSnapshot(fmDocRef, (snapshot) => {
+          onSnapshot(fmDocRef, async (snapshot) => {
             if (snapshot.exists()) {
               const cloudMaster = snapshot.data() as any;
-              if (cloudMaster && Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
-                const cloudUpdated = cloudMaster.updatedAt || '';
-                const lastLocal = this.finalMissionLastSavedAt || '';
-                // Only sync if local has no saved timestamp yet, or cloud is strictly equal/newer
-                if (!lastLocal || !cloudUpdated || cloudUpdated >= lastLocal) {
-                  console.log(`[Firebase] Terdeteksi pembaruan Misi Akhir dari Cloud (${cloudMaster.questions.length} butir soal). Menyinkronkan cache lokal...`);
+              const cloudUpdated = cloudMaster?.updatedAt || '';
+              const localSavedAt =
+                (typeof window !== 'undefined' ? localStorage.getItem('jr_db_final_mission_last_saved_at') : null) ||
+                this.finalMissionLastSavedAt ||
+                '';
+
+              const localQuestions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
+
+              // KASUS 1: Data lokal lebih baru daripada cloud -> JANGAN timpa lokal! Sebaliknya, unggah data lokal ke cloud
+              if (localSavedAt && cloudUpdated && localSavedAt > cloudUpdated && localQuestions.length > 0) {
+                console.log(`[Firebase] Data Misi Akhir lokal (${localSavedAt}) lebih baru daripada Cloud (${cloudUpdated}). Menjaga data lokal dan mengunggah ke Cloud...`);
+                this.persistFinalMissionMaster('Super Admin', localQuestions).catch(() => {});
+                return;
+              }
+
+              // KASUS 2: Cloud lebih baru daripada lokal, atau belum pernah disimpan lokal, atau lokal kosong
+              if (cloudUpdated && (!localSavedAt || cloudUpdated >= localSavedAt || localQuestions.length === 0)) {
+                let cloudQuestions: FinalMissionQuestion[] = [];
+                if (Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
+                  cloudQuestions = cloudMaster.questions;
+                } else {
+                  // Fallback: muat dari dokumen partisi (settings/final_mission_anak, remaja, dewasa)
+                  try {
+                    const [anakDoc, remajaDoc, dewasaDoc] = await Promise.all([
+                      getCloudDoc<any>('settings', 'final_mission_anak'),
+                      getCloudDoc<any>('settings', 'final_mission_remaja'),
+                      getCloudDoc<any>('settings', 'final_mission_dewasa'),
+                    ]);
+                    cloudQuestions = [
+                      ...(anakDoc?.questions || []),
+                      ...(remajaDoc?.questions || []),
+                      ...(dewasaDoc?.questions || []),
+                    ];
+                  } catch (err) {
+                    console.warn('[Firebase] Gagal mengambil partisi Misi Akhir:', err);
+                  }
+                }
+
+                if (cloudQuestions.length > 0) {
+                  console.log(`[Firebase] Menyinkronkan ${cloudQuestions.length} butir soal Misi Akhir dari Cloud (${cloudUpdated}).`);
                   this.isCloudSyncing = true;
-                  this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, cloudMaster.questions);
-                  if (cloudUpdated) this.finalMissionLastSavedAt = cloudUpdated;
+                  this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, this.sortQuestionsNaturally(cloudQuestions));
+                  this.finalMissionLastSavedAt = cloudUpdated;
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('jr_db_final_mission_last_saved_at', cloudUpdated);
+                  }
                   this.isCloudSyncing = false;
                   this.notify();
                 }
@@ -4353,6 +4391,7 @@ class DatabaseService {
   /**
    * Permanently save Final Mission bank (questions + uploaded images) to Server Disk & Cloud Firestore
    * to guarantee 100% cross-device, cross-account availability.
+   * Utilizes 3-tier partitioning & batch writes to completely bypass Firestore's 1MB document limit.
    */
   public async persistFinalMissionMaster(
     author: string = 'Super Admin',
@@ -4363,9 +4402,22 @@ class DatabaseService {
     cloudSynced: boolean;
     serverDiskSaved: boolean;
   }> {
-    const currentQuestions = questionsToPersist || this.getFinalMissionQuestions();
+    const rawQuestions = questionsToPersist || this.getFinalMissionQuestions();
+    
+    // 0. Sanitize questions: strip heavy base64 strings so documents stay lightweight (<40KB)
+    const cleanQuestions = rawQuestions.map((q) => {
+      const copy = { ...q };
+      delete (copy as any).imageDataUrl;
+      return copy;
+    });
+
     const timestamp = new Date().toISOString();
     this.finalMissionLastSavedAt = timestamp;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('jr_db_final_mission_last_saved_at', timestamp);
+      } catch {}
+    }
     let serverDiskSaved = false;
     let cloudSynced = false;
 
@@ -4378,33 +4430,72 @@ class DatabaseService {
           body: JSON.stringify({
             author,
             updatedAt: timestamp,
-            questions: currentQuestions,
+            questions: cleanQuestions,
           }),
         }),
-        new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('Server write timeout')), 5000)),
+        new Promise<Response>((_, reject) => setTimeout(() => reject(new Error('Server write timeout')), 6000)),
       ]);
       if (serverRes && serverRes.ok) {
         serverDiskSaved = true;
-        console.log(`[DB] Berhasil menyimpan ${currentQuestions.length} butir soal Misi Akhir ke disk server.`);
+        console.log(`[DB] Berhasil menyimpan ${cleanQuestions.length} butir soal Misi Akhir ke disk server.`);
       }
     } catch (e) {
       console.warn('[DB] Server disk persistence for final mission error:', e);
     }
 
-    // 2. Simpan ke Cloud Firestore (settings/final_mission_master)
+    // 2. Simpan ke Cloud Firestore dengan arsitektur partisi (Mencegah batas 1MB Firestore)
     try {
-      await Promise.race([
+      const anakQuestions = cleanQuestions.filter((q) => q.classification === 'anak');
+      const remajaQuestions = cleanQuestions.filter((q) => q.classification === 'remaja');
+      const dewasaQuestions = cleanQuestions.filter((q) => q.classification === 'dewasa');
+
+      const cloudPromises: Promise<any>[] = [
+        // Partisi Anak
+        saveCloudDoc('settings', 'final_mission_anak', {
+          id: 'final_mission_anak',
+          classification: 'anak',
+          updatedAt: timestamp,
+          updatedBy: author,
+          questionsCount: anakQuestions.length,
+          questions: anakQuestions,
+        }),
+        // Partisi Remaja
+        saveCloudDoc('settings', 'final_mission_remaja', {
+          id: 'final_mission_remaja',
+          classification: 'remaja',
+          updatedAt: timestamp,
+          updatedBy: author,
+          questionsCount: remajaQuestions.length,
+          questions: remajaQuestions,
+        }),
+        // Partisi Dewasa
+        saveCloudDoc('settings', 'final_mission_dewasa', {
+          id: 'final_mission_dewasa',
+          classification: 'dewasa',
+          updatedAt: timestamp,
+          updatedBy: author,
+          questionsCount: dewasaQuestions.length,
+          questions: dewasaQuestions,
+        }),
+        // Master summary document
         saveCloudDoc('settings', 'final_mission_master', {
           id: 'final_mission_master',
           updatedAt: timestamp,
           updatedBy: author,
-          questionsCount: currentQuestions.length,
-          questions: currentQuestions,
+          questionsCount: cleanQuestions.length,
+          classifications: ['anak', 'remaja', 'dewasa'],
+          questions: cleanQuestions,
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cloud timeout (6 detik)')), 6000)),
+        // Simpan setiap butir soal secara individual ke koleksi final_mission_questions
+        batchSaveCloudDocs('final_mission_questions', cleanQuestions as Array<{ id: string; [key: string]: any }>),
+      ];
+
+      await Promise.race([
+        Promise.all(cloudPromises),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cloud timeout (8 detik)')), 8000)),
       ]);
       cloudSynced = true;
-      console.log(`[DB] Berhasil menyinkronkan ${currentQuestions.length} butir soal Misi Akhir ke Cloud Firestore.`);
+      console.log(`[DB] Berhasil menyinkronkan ${cleanQuestions.length} butir soal Misi Akhir (3 Kategori) ke Cloud Firestore.`);
     } catch (e) {
       console.warn('[DB] Firestore cloud sync for final mission master error:', e);
     }
@@ -4412,7 +4503,7 @@ class DatabaseService {
     this.notify();
     return {
       success: serverDiskSaved || cloudSynced,
-      questionsCount: currentQuestions.length,
+      questionsCount: cleanQuestions.length,
       cloudSynced,
       serverDiskSaved,
     };
@@ -5458,6 +5549,13 @@ class DatabaseService {
    */
   public saveFinalMissionQuestion(question: FinalMissionQuestion, oldId?: string): void {
     let questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
+    const timestamp = new Date().toISOString();
+    this.finalMissionLastSavedAt = timestamp;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('jr_db_final_mission_last_saved_at', timestamp);
+      } catch {}
+    }
     
     // Jika ada ID lama yang diganti (misal Q12_1 diubah menjadi Q12)
     if (oldId && oldId !== question.id) {
@@ -5474,6 +5572,11 @@ class DatabaseService {
         }
         questions = this.sortQuestionsNaturally(questions);
         this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+        
+        // Simpan dokumen tunggal ke Firestore langsung
+        const cleanQ = { ...question };
+        delete (cleanQ as any).imageDataUrl;
+        saveCloudDoc('final_mission_questions', cleanQ.id, cleanQ).catch(() => {});
         this.persistFinalMissionMaster('Super Admin', questions).catch(() => {});
         return;
       }
@@ -5487,6 +5590,11 @@ class DatabaseService {
     }
     questions = this.sortQuestionsNaturally(questions);
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+    
+    // Simpan dokumen tunggal ke Firestore langsung
+    const cleanQ = { ...question };
+    delete (cleanQ as any).imageDataUrl;
+    saveCloudDoc('final_mission_questions', cleanQ.id, cleanQ).catch(() => {});
     this.persistFinalMissionMaster('Super Admin', questions).catch(() => {});
   }
 
@@ -5699,8 +5807,23 @@ class DatabaseService {
       target.imageFileName = '';
     });
 
+    const timestamp = new Date().toISOString();
+    this.finalMissionLastSavedAt = timestamp;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('jr_db_final_mission_last_saved_at', timestamp);
+      } catch {}
+    }
+
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
     await this.persistFinalMissionMaster('Super Admin', questions);
+
+    // Save individual updated question doc to Firestore
+    targets.forEach((target) => {
+      const cleanQ = { ...target };
+      delete (cleanQ as any).imageDataUrl;
+      saveCloudDoc('final_mission_questions', cleanQ.id, cleanQ).catch(() => {});
+    });
 
     // Delete physical image files from server disk if applicable
     for (const oldImageUrl of oldImageUrls) {

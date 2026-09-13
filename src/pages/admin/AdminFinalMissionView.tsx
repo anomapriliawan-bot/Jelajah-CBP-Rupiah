@@ -591,6 +591,30 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     reader.readAsArrayBuffer(file);
   };
 
+  // Direct One-Click Question Image Purge - completely cleans image, file name, and caches with zero trace
+  const handleDeleteImageDirect = async (target: FinalMissionQuestion) => {
+    const targetId = target.id;
+    sounds.playPop();
+    // Update local questions state instantly for immediate responsive UI feedback
+    setQuestions((prev) =>
+      prev.map((item) =>
+        item.id === targetId || item.id.toLowerCase() === targetId.toLowerCase()
+          ? { ...item, imageUrl: undefined, imageFileName: '', imageDataUrl: undefined }
+          : item
+      )
+    );
+    if (selectedQuestion && (selectedQuestion.id === targetId || selectedQuestion.id.toLowerCase() === targetId.toLowerCase())) {
+      setSelectedQuestion({
+        ...selectedQuestion,
+        imageUrl: undefined,
+        imageFileName: '',
+      });
+    }
+    showToast(`Gambar butir soal ${targetId} berhasil dihapus permanen tanpa bekas.`);
+    await db.removeFinalMissionQuestionImage(targetId);
+    refreshData();
+  };
+
   // Delete Question Image Handler - completely purges image data, filename, and cache with zero leftovers
   const handleDeleteImage = async () => {
     if (!deleteImageTarget) return;
@@ -1516,8 +1540,7 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                   q.imageFileName || '',
                                   q.imageFileName ? q.imageFileName.toLowerCase() : '',
                                 ]}
-                                showPlaceholderOnMissing={true}
-                                fallbackTitle={q.id}
+                                hideOnError={true}
                                 className="w-full h-full object-contain"
                               />
                             </button>
@@ -1543,9 +1566,9 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setDeleteImageTarget(q)}
+                                  onClick={() => handleDeleteImageDirect(q)}
                                   className="p-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-[9px] font-bold flex items-center cursor-pointer transition-colors"
-                                  title="Hapus Gambar Soal Ini"
+                                  title="Hapus Gambar Soal Ini (Sekali Klik)"
                                 >
                                   <Trash2 className="w-2.5 h-2.5" />
                                 </button>
@@ -1573,9 +1596,9 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={() => setDeleteImageTarget(q)}
+                                  onClick={() => handleDeleteImageDirect(q)}
                                   className="p-0.5 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
-                                  title="Hapus nama file ini"
+                                  title="Hapus nama file ini (Sekali Klik)"
                                 >
                                   <Trash2 className="w-2.5 h-2.5" />
                                 </button>
@@ -2009,7 +2032,7 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                     selectedQuestion.id,
                                     selectedQuestion.imageFileName || '',
                                   ]}
-                                  showPlaceholderOnMissing={true}
+                                  hideOnError={true}
                                   className="w-full h-full object-contain"
                                 />
                               </button>
@@ -2031,8 +2054,9 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => setDeleteImageTarget(selectedQuestion)}
+                                    onClick={() => handleDeleteImageDirect(selectedQuestion)}
                                     className="px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                    title="Hapus Gambar Soal Ini (Sekali Klik)"
                                   >
                                     <Trash2 className="w-3 h-3" />
                                     <span>Hapus</span>
