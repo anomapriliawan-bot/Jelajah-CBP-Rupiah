@@ -1846,14 +1846,20 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                     <input
                       type="number"
                       min="1"
-                      value={selectedQuestion.points || (selectedQuestion.questionType === 'Skala 1-5' ? 5 : 10)}
-                      onChange={(e) =>
+                      value={selectedQuestion.points !== undefined ? selectedQuestion.points : (selectedQuestion.questionType === 'Skala 1-5' ? 5 : 10)}
+                      onChange={(e) => {
+                        const newPts = parseInt(e.target.value, 10) || 1;
+                        let updatedOptPoints = selectedQuestion.optionPoints;
+                        if (Array.isArray(updatedOptPoints) && updatedOptPoints.length > 0) {
+                          updatedOptPoints = updatedOptPoints.map((p) => (p > 0 ? newPts : 0));
+                        }
                         setSelectedQuestion({
                           ...selectedQuestion,
-                          points: parseInt(e.target.value, 10) || 1,
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-slate-800 bg-white"
+                          points: newPts,
+                          ...(updatedOptPoints ? { optionPoints: updatedOptPoints } : {}),
+                        });
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-slate-800 bg-white font-bold"
                     />
                     <span className="text-[10px] text-slate-500 block mt-1">
                       Admin memegang kendali penuh menentukan poin soal ini tanpa batas maksimum.

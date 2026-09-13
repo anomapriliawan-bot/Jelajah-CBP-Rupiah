@@ -532,18 +532,18 @@ class DatabaseService {
         this.inMemoryStore.set(key, cached);
         return cached;
       }
-      // Check legacy localStorage if not yet migrated
+      // Check localStorage for instant synchronous retrieval on page reload
       try {
         const raw = localStorage.getItem(key);
         if (raw) {
           const parsed = JSON.parse(raw);
-          this.inMemoryStore.set(key, parsed);
-          savePayloadToStore(key, parsed);
-          localStorage.removeItem(key); // Free up quota immediately!
-          return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this.inMemoryStore.set(key, parsed);
+            return parsed;
+          }
         }
       } catch (err) {
-        console.warn(`[DB] Migration parse error for ${key}:`, err);
+        console.warn(`[DB] Storage parse error for ${key}:`, err);
       }
       return fallback;
     }
@@ -571,14 +571,14 @@ class DatabaseService {
       storagePayload = this.sanitizeFinalMissionQuestionsForStorage(data as unknown as FinalMissionQuestion[]);
     }
 
-    // If key is managed by high-capacity IndexedDB, bypass localStorage completely!
+    // If key is managed by high-capacity IndexedDB, save to IndexedDB AND keep clean lightweight copy in localStorage
     if (ASYNC_IDB_KEYS.has(key)) {
       savePayloadToStore(key, storagePayload);
       try {
-        // Guarantee legacy key is cleared from localStorage so quota is never exceeded
-        localStorage.removeItem(key);
+        // Simpan versi sanitized (ringan tanpa base64, ~30KB) ke localStorage agar langsung terbaca seketika saat reload
+        localStorage.setItem(key, JSON.stringify(storagePayload));
       } catch {
-        // ignore
+        // Jika kuota localStorage browser penuh, IndexedDB tetap menyimpan secara aman
       }
       this.notify();
       if (!this.isCloudSyncing) {
@@ -958,24 +958,28 @@ class DatabaseService {
               // KASUS 2: Cloud lebih baru daripada lokal, atau belum pernah disimpan lokal, atau lokal kosong
               if (cloudUpdated && (!localSavedAt || cloudUpdated >= localSavedAt || localQuestions.length === 0)) {
                 let cloudQuestions: FinalMissionQuestion[] = [];
-                if (Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
-                  cloudQuestions = cloudMaster.questions;
-                } else {
-                  // Fallback: muat dari dokumen partisi (settings/final_mission_anak, remaja, dewasa)
-                  try {
-                    const [anakDoc, remajaDoc, dewasaDoc] = await Promise.all([
-                      getCloudDoc<any>('settings', 'final_mission_anak'),
-                      getCloudDoc<any>('settings', 'final_mission_remaja'),
-                      getCloudDoc<any>('settings', 'final_mission_dewasa'),
-                    ]);
-                    cloudQuestions = [
-                      ...(anakDoc?.questions || []),
-                      ...(remajaDoc?.questions || []),
-                      ...(dewasaDoc?.questions || []),
-                    ];
-                  } catch (err) {
-                    console.warn('[Firebase] Gagal mengambil partisi Misi Akhir:', err);
+                // UTAMAKAN dokumen partisi resmi Cloud (settings/final_mission_anak, remaja, dewasa)
+                try {
+                  const [anakDoc, remajaDoc, dewasaDoc] = await Promise.all([
+                    getCloudDoc<any>('settings', 'final_mission_anak'),
+                    getCloudDoc<any>('settings', 'final_mission_remaja'),
+                    getCloudDoc<any>('settings', 'final_mission_dewasa'),
+                  ]);
+                  const partitioned = [
+                    ...(anakDoc?.questions || []),
+                    ...(remajaDoc?.questions || []),
+                    ...(dewasaDoc?.questions || []),
+                  ];
+                  if (partitioned.length > 0) {
+                    cloudQuestions = partitioned;
                   }
+                } catch (err) {
+                  console.warn('[Firebase] Gagal mengambil partisi Misi Akhir:', err);
+                }
+
+                // Fallback jika partisi kosong
+                if (cloudQuestions.length === 0 && Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
+                  cloudQuestions = cloudMaster.questions;
                 }
 
                 if (cloudQuestions.length > 0) {
@@ -1038,20 +1042,18 @@ class DatabaseService {
   }
 
   public ensureInitialized() {
-    // 1. Migrate and clear any legacy final mission questions from localStorage to eliminate quota errors
+    // 1. Preload questions from localStorage immediately if available (synchronous 0ms load on reload)
     try {
-      const legacyFMQ = localStorage.getItem(STORAGE_KEYS.FINAL_MISSION_QUESTIONS);
-      if (legacyFMQ) {
+      const localFMQ = localStorage.getItem(STORAGE_KEYS.FINAL_MISSION_QUESTIONS);
+      if (localFMQ) {
         try {
-          const parsed = JSON.parse(legacyFMQ);
+          const parsed = JSON.parse(localFMQ);
           if (Array.isArray(parsed) && parsed.length > 0) {
             this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, parsed);
-            savePayloadToStore(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, parsed);
           }
         } catch {
           // ignore
         }
-        localStorage.removeItem(STORAGE_KEYS.FINAL_MISSION_QUESTIONS);
       }
     } catch {
       // ignore
@@ -1063,12 +1065,6 @@ class DatabaseService {
         if (loaded && Array.isArray(loaded) && loaded.length > 0) {
           this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, loaded);
           this.notify();
-        } else {
-          // Only seed if IndexedDB and in-memory store are genuinely empty
-          const current = this.inMemoryStore.get(STORAGE_KEYS.FINAL_MISSION_QUESTIONS) as FinalMissionQuestion[] | undefined;
-          if (!current || current.length === 0) {
-            this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, JSON.parse(JSON.stringify(allSeedFinalMissionQuestions)));
-          }
         }
       })
       .catch(() => {});
@@ -4443,14 +4439,14 @@ class DatabaseService {
       console.warn('[DB] Server disk persistence for final mission error:', e);
     }
 
-    // 2. Simpan ke Cloud Firestore dengan arsitektur partisi (Mencegah batas 1MB Firestore)
+    // 2. Simpan ke Cloud Firestore dengan arsitektur 3 partisi (Mencegah batas 1MB Firestore & menjamin sinkronisasi multi-pengguna)
     try {
       const anakQuestions = cleanQuestions.filter((q) => q.classification === 'anak');
       const remajaQuestions = cleanQuestions.filter((q) => q.classification === 'remaja');
       const dewasaQuestions = cleanQuestions.filter((q) => q.classification === 'dewasa');
 
-      const cloudPromises: Promise<any>[] = [
-        // Partisi Anak
+      // 2a. Simpan partisi per kategori terlebih dahulu (< 15 KB per dokumen)
+      await Promise.all([
         saveCloudDoc('settings', 'final_mission_anak', {
           id: 'final_mission_anak',
           classification: 'anak',
@@ -4459,7 +4455,6 @@ class DatabaseService {
           questionsCount: anakQuestions.length,
           questions: anakQuestions,
         }),
-        // Partisi Remaja
         saveCloudDoc('settings', 'final_mission_remaja', {
           id: 'final_mission_remaja',
           classification: 'remaja',
@@ -4468,7 +4463,6 @@ class DatabaseService {
           questionsCount: remajaQuestions.length,
           questions: remajaQuestions,
         }),
-        // Partisi Dewasa
         saveCloudDoc('settings', 'final_mission_dewasa', {
           id: 'final_mission_dewasa',
           classification: 'dewasa',
@@ -4477,25 +4471,22 @@ class DatabaseService {
           questionsCount: dewasaQuestions.length,
           questions: dewasaQuestions,
         }),
-        // Master summary document
-        saveCloudDoc('settings', 'final_mission_master', {
-          id: 'final_mission_master',
-          updatedAt: timestamp,
-          updatedBy: author,
-          questionsCount: cleanQuestions.length,
-          classifications: ['anak', 'remaja', 'dewasa'],
-          questions: cleanQuestions,
-        }),
-        // Simpan setiap butir soal secara individual ke koleksi final_mission_questions
-        batchSaveCloudDocs('final_mission_questions', cleanQuestions as Array<{ id: string; [key: string]: any }>),
-      ];
-
-      await Promise.race([
-        Promise.all(cloudPromises),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cloud timeout (8 detik)')), 8000)),
       ]);
+
+      // 2b. Simpan master trigger untuk memicu real-time listener seketika pada semua pengguna & siswa
+      await saveCloudDoc('settings', 'final_mission_master', {
+        id: 'final_mission_master',
+        updatedAt: timestamp,
+        updatedBy: author,
+        questionsCount: cleanQuestions.length,
+        classifications: ['anak', 'remaja', 'dewasa'],
+      });
       cloudSynced = true;
-      console.log(`[DB] Berhasil menyinkronkan ${cleanQuestions.length} butir soal Misi Akhir (3 Kategori) ke Cloud Firestore.`);
+
+      // 2c. Simpan koleksi individual butir soal di latar belakang
+      batchSaveCloudDocs('final_mission_questions', cleanQuestions as Array<{ id: string; [key: string]: any }>).catch(() => {});
+
+      console.log(`[DB] Berhasil menyinkronkan ${cleanQuestions.length} butir soal Misi Akhir (3 Partisi) ke Cloud Firestore.`);
     } catch (e) {
       console.warn('[DB] Firestore cloud sync for final mission master error:', e);
     }
@@ -5511,6 +5502,26 @@ class DatabaseService {
   ): FinalMissionQuestion[] {
     let questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
     if (!questions || questions.length === 0) {
+      const inMem = this.inMemoryStore.get(STORAGE_KEYS.FINAL_MISSION_QUESTIONS) as FinalMissionQuestion[] | undefined;
+      if (inMem && inMem.length > 0) {
+        questions = inMem;
+      }
+    }
+
+    if (!questions || questions.length === 0) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.FINAL_MISSION_QUESTIONS);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            questions = parsed;
+            this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, parsed);
+          }
+        }
+      } catch {}
+    }
+
+    if (!questions || questions.length === 0) {
       questions = this.sortQuestionsNaturally(JSON.parse(JSON.stringify(allSeedFinalMissionQuestions)));
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
     }
@@ -5684,6 +5695,7 @@ class DatabaseService {
       const clonedAll: FinalMissionQuestion[] = JSON.parse(JSON.stringify(allSeedFinalMissionQuestions));
       const sorted = this.sortQuestionsNaturally(clonedAll);
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, sorted);
+      this.persistFinalMissionMaster('Super Admin', sorted).catch(() => {});
       this.notify();
       return sorted.length;
     }
@@ -5701,6 +5713,7 @@ class DatabaseService {
     const filtered = current.filter((q) => q.classification !== classification);
     const sorted = this.sortQuestionsNaturally([...filtered, ...defaultForClass]);
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, sorted);
+    this.persistFinalMissionMaster('Super Admin', sorted).catch(() => {});
     this.notify();
     return defaultForClass.length;
   }
