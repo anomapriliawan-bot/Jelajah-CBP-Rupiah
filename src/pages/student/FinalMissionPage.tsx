@@ -128,8 +128,9 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
   const [lastAttempt, setLastAttempt] = useState<FinalMissionAttempt | null>(null);
   const [showCertificateModal, setShowCertificateModal] = useState(false);
 
-  // Image Lightbox
+  // Image Lightbox & Error Tracking
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [imageLoadFailed, setImageLoadFailed] = useState<Record<string, boolean>>({});
 
   // Refresh progress when classification changes or DB updates
   useEffect(() => {
@@ -1369,7 +1370,9 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
               </h2>
 
               {/* Question Image (safely rendered; collapses cleanly with 0 space if absent or failed) */}
-              {(!currentQ.matrixItems || currentQ.matrixItems.length === 0) && Boolean(questionImage) && (
+              {(!currentQ.matrixItems || currentQ.matrixItems.length === 0) &&
+                Boolean(questionImage) &&
+                !imageLoadFailed[currentQ.id] && (
                 <div className="relative rounded-2xl overflow-hidden border border-slate-700 bg-slate-900/80 p-2 flex flex-col items-center justify-center group">
                   <SafeImage
                     src={questionImage}
@@ -1382,6 +1385,9 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
                       currentQ.imageFileName ? currentQ.imageFileName.toLowerCase() : '',
                     ]}
                     hideOnError={true}
+                    onError={() => {
+                      setImageLoadFailed((prev) => ({ ...prev, [currentQ.id]: true }));
+                    }}
                     className="max-h-72 w-auto object-contain rounded-xl transition-transform group-hover:scale-[1.01]"
                   />
                   <button

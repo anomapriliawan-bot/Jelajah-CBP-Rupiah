@@ -5677,43 +5677,57 @@ class DatabaseService {
   }
 
   /**
-   * Remove image from a question
+   * Remove image from a question completely (purges URL, filename, dataUrl, cache, and cloud references)
    */
   public async removeFinalMissionQuestionImage(questionId: string): Promise<boolean> {
     if (!questionId) return false;
 
-    const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
-    const target = questions.find((q) => q.id === questionId);
-    const oldFileName = target?.imageFileName;
-    const oldImageUrl = target?.imageUrl;
+    const questions = this.getFinalMissionQuestions();
+    const cleanId = questionId.trim();
+    const targets = questions.filter(
+      (q) => q.id === cleanId || q.id.toLowerCase() === cleanId.toLowerCase()
+    );
 
-    if (target) {
+    const oldFileNames: string[] = [];
+    const oldImageUrls: string[] = [];
+
+    targets.forEach((target) => {
+      if (target.imageFileName) oldFileNames.push(target.imageFileName);
+      if (target.imageUrl) oldImageUrls.push(target.imageUrl);
       delete target.imageUrl;
       delete (target as any).imageDataUrl;
       target.imageFileName = '';
-      this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-      this.persistFinalMissionMaster('Super Admin').catch(() => {});
+    });
+
+    this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+    await this.persistFinalMissionMaster('Super Admin', questions);
+
+    // Delete physical image files from server disk if applicable
+    for (const oldImageUrl of oldImageUrls) {
+      if (oldImageUrl && oldImageUrl.startsWith('/images/')) {
+        const cleanUrl = oldImageUrl.split('?')[0];
+        deleteImageFromServer(cleanUrl).catch(() => {});
+      }
     }
 
-    if (oldImageUrl && oldImageUrl.startsWith('/images/')) {
-      const cleanUrl = oldImageUrl.split('?')[0];
-      deleteImageFromServer(cleanUrl).catch(() => {});
-    }
-
+    // Build comprehensive lookup keys to completely purge cache and storage
     const lookupKeys = [
-      `fm_q_${questionId}`,
-      `fm_q_${questionId?.toLowerCase()}`,
-      questionId,
-      oldFileName || '',
-      oldFileName ? oldFileName.toLowerCase() : '',
+      `fm_q_${cleanId}`,
+      `fm_q_${cleanId.toLowerCase()}`,
+      cleanId,
+      cleanId.toLowerCase(),
+      ...oldFileNames,
+      ...oldFileNames.map((fn) => fn.toLowerCase()),
     ].filter(Boolean);
 
     await deleteImageFromStore(lookupKeys);
-    deleteCloudDoc('uploaded_images', `fm_q_${questionId.toLowerCase()}`).catch(() => {});
-    if (oldFileName) {
+    deleteCloudDoc('uploaded_images', `fm_q_${cleanId.toLowerCase()}`).catch(() => {});
+    for (const oldFileName of oldFileNames) {
       const cleanKey = `final-mission_${oldFileName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
       deleteCloudDoc('uploaded_images', cleanKey).catch(() => {});
     }
+
+    this.notify();
     return true;
   }
 

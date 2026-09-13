@@ -591,16 +591,24 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     reader.readAsArrayBuffer(file);
   };
 
-  // Delete Question Image Handler
+  // Delete Question Image Handler - completely purges image data, filename, and cache with zero leftovers
   const handleDeleteImage = async () => {
     if (!deleteImageTarget) return;
     const targetId = deleteImageTarget.id;
     await db.removeFinalMissionQuestionImage(targetId);
-    await db.persistFinalMissionMaster('Super Admin');
     sounds.playPop();
-    showToast(`Gambar untuk butir soal ${targetId} berhasil dihapus dari server & cloud.`);
+    showToast(`Gambar dan nama file untuk butir soal ${targetId} telah dihapus bersih tanpa sisa.`);
+    
+    // Update local questions state immediately so UI updates instantaneously
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === targetId || q.id.toLowerCase() === targetId.toLowerCase()
+          ? { ...q, imageUrl: undefined, imageFileName: '', imageDataUrl: undefined }
+          : q
+      )
+    );
     refreshData();
-    if (selectedQuestion && selectedQuestion.id === targetId) {
+    if (selectedQuestion && (selectedQuestion.id === targetId || selectedQuestion.id.toLowerCase() === targetId.toLowerCase())) {
       setSelectedQuestion({
         ...selectedQuestion,
         imageUrl: undefined,
@@ -1559,9 +1567,19 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                               <span>Upload</span>
                             </button>
                             {q.imageFileName && (
-                              <span className="text-[10px] text-slate-400 font-mono truncate max-w-[60px]" title={q.imageFileName}>
-                                {q.imageFileName}
-                              </span>
+                              <div className="flex items-center gap-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                <span className="text-[10px] text-slate-500 font-mono truncate max-w-[65px]" title={q.imageFileName}>
+                                  {q.imageFileName}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteImageTarget(q)}
+                                  className="p-0.5 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
+                                  title="Hapus nama file ini"
+                                >
+                                  <Trash2 className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
                             )}
                           </div>
                         )}
