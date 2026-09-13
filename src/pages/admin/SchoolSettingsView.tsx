@@ -123,7 +123,7 @@ export const SchoolSettingsView: React.FC<SchoolSettingsViewProps> = ({ currentU
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isSuperAdmin) {
       alert('Hanya Super Administrator yang memiliki kewenangan mengubah logo resmi sistem.');
       return;
@@ -132,7 +132,7 @@ export const SchoolSettingsView: React.FC<SchoolSettingsViewProps> = ({ currentU
     setIsSaving(true);
     sounds.playSuccess();
 
-    const updated = db.updateSchoolSettings({
+    const updated = await db.updateSchoolSettingsAsync({
       ...settings,
       schoolLogo: schoolLogo,
     });

@@ -19,7 +19,8 @@ import { db } from '../../services/db';
 import { sounds } from '../../utils/audio';
 import { compressImageFile } from '../../utils/imageCompressor';
 import { uploadDataUrlToServer, deleteImageFromServer } from '../../services/uploadService';
-import { getImageFromStore, buildLessonImageKeys } from '../../services/imageStore';
+import { getImageFromStore, saveImageToStore, buildLessonImageKeys } from '../../services/imageStore';
+import { SafeImage } from '../../components/common/SafeImage';
 
 interface MissionLearnPageProps {
   missionId: string;
@@ -121,6 +122,11 @@ export const MissionLearnPage: React.FC<MissionLearnPageProps> = ({
       // Upload physically to server disk (/public/images/lessons/)
       const serverRes = await uploadDataUrlToServer(file.name, res.dataUrl, 'lessons');
       const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : res.dataUrl;
+
+      // Save immediately into store & memory cache so student view gets it instantly
+      const order = Number(currentLesson.contentOrder || currentLesson.orderIndex || currentIndex + 1);
+      const keys = buildLessonImageKeys(currentLesson.id, currentLesson.missionId, order, currentLesson.code);
+      saveImageToStore(currentLesson.id, res.dataUrl, keys);
 
       db.updateLesson(
         currentLesson.id,
@@ -320,25 +326,25 @@ export const MissionLearnPage: React.FC<MissionLearnPageProps> = ({
           {imageUrl && imageUrl.trim() !== '' ? (
             <div className="p-3 sm:p-5 bg-slate-50 border-b border-slate-100 flex flex-col items-center justify-center relative group">
               <div className="w-full flex flex-col items-center justify-center rounded-2xl overflow-hidden bg-slate-100/60 border border-slate-200 shadow-xs relative">
-                <img
+                <SafeImage
                   src={imageUrl}
                   alt={title}
-                  referrerPolicy="no-referrer"
+                  lookupKeys={
+                    currentLesson && mission
+                      ? [
+                          ...buildLessonImageKeys(
+                            currentLesson.id,
+                            mission.id,
+                            currentLesson.content_order || currentLesson.contentOrder || currentLesson.orderIndex,
+                            currentLesson.code
+                          ),
+                          mission.id,
+                          `cbr_img_${mission.id}`,
+                        ]
+                      : []
+                  }
+                  hideOnError={!isAdminOrTeacher}
                   className="w-full h-auto max-h-[580px] object-contain rounded-2xl transition-all"
-                  onError={(e) => {
-                    if (currentLesson && mission) {
-                      const keys = buildLessonImageKeys(
-                        currentLesson.id,
-                        mission.id,
-                        currentLesson.content_order || currentLesson.contentOrder || currentLesson.orderIndex,
-                        currentLesson.code
-                      );
-                      const fallback = getImageFromStore(keys) || getImageFromStore([mission.id, `cbr_img_${mission.id}`]);
-                      if (fallback && e.currentTarget.src !== fallback) {
-                        e.currentTarget.src = fallback;
-                      }
-                    }
-                  }}
                 />
 
                 {/* Admin Quick Overlay Actions */}

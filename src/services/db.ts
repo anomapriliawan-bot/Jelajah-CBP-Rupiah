@@ -394,6 +394,7 @@ class DatabaseService {
   private inMemoryGuestFinalProgress: FinalMissionProgress[] = [];
   private inMemoryGuestFinalAttempts: FinalMissionAttempt[] = [];
   private notifyScheduled: boolean = false;
+  private finalMissionLastSavedAt: string = '';
 
   constructor() {
     this.ensureInitialized();
@@ -428,13 +429,31 @@ class DatabaseService {
       const copy: FinalMissionQuestion = { ...q };
 
       // Offload question imageUrl if base64 or long data string
-      if (copy.imageUrl && (copy.imageUrl.startsWith('data:') || copy.imageUrl.length > 256)) {
-        saveImageToStore(`fm_q_${copy.id}`, copy.imageUrl, [copy.id, copy.imageFileName || '']);
+      const rawImg = (copy as any).imageDataUrl || copy.imageUrl;
+      if (rawImg && (rawImg.startsWith('data:') || rawImg.length > 256)) {
+        const keys = [`fm_q_${copy.id}`, `fm_q_${copy.id?.toLowerCase()}`, copy.id, copy.imageFileName || ''];
+        saveImageToStore(`fm_q_${copy.id}`, rawImg, keys);
+        // Backup to Cloud Firestore 'uploaded_images' so any student device can download it
+        try {
+          const cleanKey = `fm_q_${copy.id.toLowerCase()}`;
+          saveCloudDoc('uploaded_images', cleanKey, {
+            id: cleanKey,
+            questionId: copy.id,
+            fileName: copy.imageFileName || `${copy.id}.webp`,
+            dataUrl: rawImg,
+            category: 'final-mission',
+            createdAt: new Date().toISOString(),
+          }).catch(() => {});
+        } catch {}
+
+        // If under 95KB, keep in copy.imageDataUrl so student devices get it directly with question
+        if (rawImg.length < 95000) {
+          (copy as any).imageDataUrl = rawImg;
+        }
+
         if (copy.imageFileName) {
           const cleanName = copy.imageFileName.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
           copy.imageUrl = `/images/final-mission/${cleanName}`;
-        } else {
-          delete copy.imageUrl;
         }
       }
 
@@ -746,7 +765,7 @@ class DatabaseService {
           }
         }
 
-        // 1. Real-time listener for School Settings
+        // 1. Real-time listener for School Settings & System Identity
         try {
           const settingsDocRef = doc(firestore, 'settings', 'school_settings');
           onSnapshot(settingsDocRef, (snapshot) => {
@@ -756,6 +775,7 @@ class DatabaseService {
               const localSettings = localRaw ? JSON.parse(localRaw) : null;
               if (cloudSettings && (!localSettings || cloudSettings.updatedAt !== localSettings.updatedAt)) {
                 this.isCloudSyncing = true;
+                this.inMemoryStore.set(STORAGE_KEYS.SCHOOL_SETTINGS, cloudSettings);
                 localStorage.setItem(STORAGE_KEYS.SCHOOL_SETTINGS, JSON.stringify(cloudSettings));
                 this.isCloudSyncing = false;
                 this.notify();
@@ -773,6 +793,35 @@ class DatabaseService {
         } catch (settingsErr: any) {
           if (settingsErr?.code !== 'unavailable') {
             console.warn('[Firebase] Settings snapshot setup notice:', settingsErr?.message || settingsErr);
+          }
+        }
+
+        // 1b. Real-time listener for Final Mission Stage Access & Admin Button Toggles
+        try {
+          const stageDocRef = doc(firestore, 'settings', 'final_mission_stage_access');
+          onSnapshot(stageDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+              const cloudAccess = snapshot.data() as FinalMissionStageAccessConfig;
+              if (cloudAccess && typeof cloudAccess === 'object') {
+                const localRaw = localStorage.getItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS);
+                const localAccess = localRaw ? JSON.parse(localRaw) : null;
+                if (!localAccess || (cloudAccess.updatedAt && cloudAccess.updatedAt !== localAccess.updatedAt)) {
+                  this.isCloudSyncing = true;
+                  this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, cloudAccess);
+                  localStorage.setItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, JSON.stringify(cloudAccess));
+                  this.isCloudSyncing = false;
+                  this.notify();
+                }
+              }
+            }
+          }, (err) => {
+            if (err?.code !== 'unavailable') {
+              console.warn('[Firebase] Stage access listener notice:', err?.message || err);
+            }
+          });
+        } catch (stageErr: any) {
+          if (stageErr?.code !== 'unavailable') {
+            console.warn('[Firebase] Stage access snapshot notice:', stageErr);
           }
         }
 
@@ -891,11 +940,17 @@ class DatabaseService {
             if (snapshot.exists()) {
               const cloudMaster = snapshot.data() as any;
               if (cloudMaster && Array.isArray(cloudMaster.questions) && cloudMaster.questions.length > 0) {
-                console.log(`[Firebase] Terdeteksi pembaruan Misi Akhir dari Cloud (${cloudMaster.questions.length} butir soal). Menyinkronkan cache lokal...`);
-                this.isCloudSyncing = true;
-                this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, cloudMaster.questions);
-                this.isCloudSyncing = false;
-                this.notify();
+                const cloudUpdated = cloudMaster.updatedAt || '';
+                const lastLocal = this.finalMissionLastSavedAt || '';
+                // Only sync if local has no saved timestamp yet, or cloud is strictly equal/newer
+                if (!lastLocal || !cloudUpdated || cloudUpdated >= lastLocal) {
+                  console.log(`[Firebase] Terdeteksi pembaruan Misi Akhir dari Cloud (${cloudMaster.questions.length} butir soal). Menyinkronkan cache lokal...`);
+                  this.isCloudSyncing = true;
+                  this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, cloudMaster.questions);
+                  if (cloudUpdated) this.finalMissionLastSavedAt = cloudUpdated;
+                  this.isCloudSyncing = false;
+                  this.notify();
+                }
               }
             }
           }, (err) => {
@@ -986,14 +1041,45 @@ class DatabaseService {
         .then((res) => (res.ok ? res.json() : null))
         .then((diskData) => {
           if (diskData && Array.isArray(diskData.questions) && diskData.questions.length > 0) {
-            const current = this.inMemoryStore.get(STORAGE_KEYS.FINAL_MISSION_QUESTIONS) as FinalMissionQuestion[] | undefined;
-            // Apply if currently empty, or if disk questions contain image references or are more up-to-date
-            if (!current || current.length === 0 || diskData.questions.some((q: any) => q.imageUrl || q.imageFileName)) {
-              this.isCloudSyncing = true;
-              this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, diskData.questions);
-              this.isCloudSyncing = false;
-              this.notify();
+            this.isCloudSyncing = true;
+            this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, diskData.questions);
+            if (diskData.updatedAt) {
+              this.finalMissionLastSavedAt = diskData.updatedAt;
             }
+            this.isCloudSyncing = false;
+            this.notify();
+          }
+        })
+        .catch(() => {});
+
+      // 2c. Check server disk for permanently saved School Settings & System Identity
+      fetch('/api/school-settings')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((diskSettings) => {
+          if (diskSettings && typeof diskSettings === 'object' && (diskSettings.schoolName || diskSettings.schoolLogo)) {
+            this.inMemoryStore.set(STORAGE_KEYS.SCHOOL_SETTINGS, diskSettings);
+            try {
+              localStorage.setItem(STORAGE_KEYS.SCHOOL_SETTINGS, JSON.stringify(diskSettings));
+            } catch {
+              // ignore
+            }
+            this.notify();
+          }
+        })
+        .catch(() => {});
+
+      // 2d. Check server disk for permanently saved Stage Access & Admin Button Toggles
+      fetch('/api/stage-access')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((diskAccess) => {
+          if (diskAccess && typeof diskAccess === 'object') {
+            this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, diskAccess);
+            try {
+              localStorage.setItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, JSON.stringify(diskAccess));
+            } catch {
+              // ignore
+            }
+            this.notify();
           }
         })
         .catch(() => {});
@@ -2157,17 +2243,22 @@ class DatabaseService {
   }
 
   public getSchoolSettings(): SchoolSettings {
+    if (this.inMemoryStore.has(STORAGE_KEYS.SCHOOL_SETTINGS)) {
+      return this.inMemoryStore.get(STORAGE_KEYS.SCHOOL_SETTINGS);
+    }
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.SCHOOL_SETTINGS);
       if (!raw) {
         return { ...DEFAULT_SCHOOL_SETTINGS };
       }
       const parsed = JSON.parse(raw);
-      return {
+      const res: SchoolSettings = {
         ...DEFAULT_SCHOOL_SETTINGS,
         ...parsed,
         schoolName: parsed.schoolName || DEFAULT_SCHOOL_SETTINGS.schoolName,
       };
+      this.inMemoryStore.set(STORAGE_KEYS.SCHOOL_SETTINGS, res);
+      return res;
     } catch {
       return { ...DEFAULT_SCHOOL_SETTINGS };
     }
@@ -2185,19 +2276,63 @@ class DatabaseService {
       updatedBy: updatedBy || this.getCurrentUser()?.name || 'Administrator',
     };
     try {
+      this.inMemoryStore.set(STORAGE_KEYS.SCHOOL_SETTINGS, updated);
       localStorage.setItem(STORAGE_KEYS.SCHOOL_SETTINGS, JSON.stringify(updated));
       saveCloudDoc('settings', 'school_settings', updated).catch(() => {});
+      if (typeof window !== 'undefined') {
+        fetch('/api/school-settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+        }).catch(() => {});
+      }
     } catch (err) {
-      console.error('Failed to save school settings to localStorage', err);
+      console.error('Failed to save school settings to storage', err);
     }
     this.notify();
     return updated;
   }
 
+  public async updateSchoolSettingsAsync(
+    settings: Partial<SchoolSettings>,
+    updatedBy?: string
+  ): Promise<SchoolSettings> {
+    const updated = this.updateSchoolSettings(settings, updatedBy);
+    if (typeof window !== 'undefined') {
+      try {
+        await Promise.allSettled([
+          fetch('/api/school-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated),
+          }),
+          saveCloudDoc('settings', 'school_settings', updated),
+        ]);
+      } catch (err) {
+        console.warn('Async school settings sync notice:', err);
+      }
+    }
+    return updated;
+  }
+
   public resetSchoolSettings(): SchoolSettings {
-    localStorage.removeItem(STORAGE_KEYS.SCHOOL_SETTINGS);
+    const reset = { ...DEFAULT_SCHOOL_SETTINGS, updatedAt: new Date().toISOString() };
+    this.inMemoryStore.set(STORAGE_KEYS.SCHOOL_SETTINGS, reset);
+    try {
+      localStorage.setItem(STORAGE_KEYS.SCHOOL_SETTINGS, JSON.stringify(reset));
+      saveCloudDoc('settings', 'school_settings', reset).catch(() => {});
+      if (typeof window !== 'undefined') {
+        fetch('/api/school-settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reset),
+        }).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
     this.notify();
-    return { ...DEFAULT_SCHOOL_SETTINGS };
+    return reset;
   }
 
   public login(
@@ -4220,14 +4355,17 @@ class DatabaseService {
    * to guarantee 100% cross-device, cross-account availability.
    */
   public async persistFinalMissionMaster(
-    author: string = 'Super Admin'
+    author: string = 'Super Admin',
+    questionsToPersist?: FinalMissionQuestion[]
   ): Promise<{
     success: boolean;
     questionsCount: number;
     cloudSynced: boolean;
     serverDiskSaved: boolean;
   }> {
-    const currentQuestions = this.getFinalMissionQuestions();
+    const currentQuestions = questionsToPersist || this.getFinalMissionQuestions();
+    const timestamp = new Date().toISOString();
+    this.finalMissionLastSavedAt = timestamp;
     let serverDiskSaved = false;
     let cloudSynced = false;
 
@@ -4239,7 +4377,7 @@ class DatabaseService {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             author,
-            updatedAt: new Date().toISOString(),
+            updatedAt: timestamp,
             questions: currentQuestions,
           }),
         }),
@@ -4258,7 +4396,7 @@ class DatabaseService {
       await Promise.race([
         saveCloudDoc('settings', 'final_mission_master', {
           id: 'final_mission_master',
-          updatedAt: new Date().toISOString(),
+          updatedAt: timestamp,
           updatedBy: author,
           questionsCount: currentQuestions.length,
           questions: currentQuestions,
@@ -5284,97 +5422,6 @@ class DatabaseService {
     if (!questions || questions.length === 0) {
       questions = this.sortQuestionsNaturally(JSON.parse(JSON.stringify(allSeedFinalMissionQuestions)));
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-    } else {
-      // Auto-migrate: Pastikan butir soal Anak-Anak selalu tersinkronisasi dengan Bank Soal Kuesioner Resmi BI (76 butir: Q1 s.d Q52)
-      const anakQuestions = questions.filter((q) => q.classification === 'anak');
-      const needsAnakUpdate =
-        anakQuestions.length !== seedFinalMissionQuestionsAnak.length ||
-        anakQuestions.some((q) => q.id === 'Q1_1' || q.id === 'Q12' || q.id === 'Q13a' || q.id === 'Q38') ||
-        !anakQuestions.some((q) => q.id === 'Q52a');
-
-      if (needsAnakUpdate) {
-        const nonAnak = questions.filter((q) => q.classification !== 'anak');
-        questions = this.sortQuestionsNaturally([...JSON.parse(JSON.stringify(seedFinalMissionQuestionsAnak)), ...nonAnak]);
-        this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-      } else {
-        // Pastikan Q52a dan Q52b bertipe Checkbox dengan skor 2 poin per centang
-        const q52a = questions.find((q) => q.id === 'Q52a');
-        const q52b = questions.find((q) => q.id === 'Q52b');
-        let needsQ52Update = false;
-
-        if (q52a && q52a.questionType !== 'Checkbox') {
-          q52a.questionType = 'Checkbox';
-          q52a.optionPoints = [2, 2, 2, 2, 2];
-          q52a.points = 10;
-          q52a.correctAnswer = 'Semua Pilihan Benar (2 Poin per Pilihan)';
-          if (q52a.question.includes('[SA]')) {
-            q52a.question = q52a.question.replace('[SA]', '[MA]');
-          }
-          needsQ52Update = true;
-        }
-
-        if (q52b && q52b.questionType !== 'Checkbox') {
-          q52b.questionType = 'Checkbox';
-          q52b.optionPoints = [2, 2, 2, 2, 2];
-          q52b.points = 10;
-          q52b.correctAnswer = 'Semua Pilihan Benar (2 Poin per Pilihan)';
-          if (q52b.question.includes('[SA]')) {
-            q52b.question = q52b.question.replace('[SA]', '[MA]');
-          }
-          needsQ52Update = true;
-        }
-
-        // Pastikan Q31a dan Q31b bertipe Checkbox (Pilihan Ganda Kompleks)
-        const q31a = questions.find((q) => q.id === 'Q31a');
-        const q31b = questions.find((q) => q.id === 'Q31b');
-        let needsQ31Update = false;
-
-        if (q31a && q31a.questionType !== 'Checkbox') {
-          q31a.questionType = 'Checkbox';
-          if (q31a.question.includes('[SA]')) {
-            q31a.question = q31a.question.replace('[SA]', '[MA]');
-          }
-          needsQ31Update = true;
-        }
-
-        if (q31b && q31b.questionType !== 'Checkbox') {
-          q31b.questionType = 'Checkbox';
-          if (q31b.question.includes('[SA]')) {
-            q31b.question = q31b.question.replace('[SA]', '[MA]');
-          }
-          needsQ31Update = true;
-        }
-
-        if (needsQ52Update || needsQ31Update) {
-          this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-        }
-      }
-
-      // Auto-migrate: Pastikan butir soal Remaja tersinkronisasi dengan Bank Soal Kuesioner Resmi BI Q1 s.d Q60
-      const remajaQuestions = questions.filter((q) => q.classification === 'remaja');
-      const needsRemajaUpdate =
-        remajaQuestions.length !== seedFinalMissionQuestionsRemaja.length ||
-        !remajaQuestions.some((q) => q.id === 'Q1a_RMJ') ||
-        !remajaQuestions.some((q) => q.id === 'Q60a_RMJ');
-
-      if (needsRemajaUpdate) {
-        const nonRemaja = questions.filter((q) => q.classification !== 'remaja');
-        questions = this.sortQuestionsNaturally([...JSON.parse(JSON.stringify(seedFinalMissionQuestionsRemaja)), ...nonRemaja]);
-        this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-      }
-
-      // Auto-migrate: Pastikan butir soal Dewasa tersinkronisasi dengan Bank Soal Kuesioner Resmi BI Q1 s.d Q60
-      const dewasaQuestions = questions.filter((q) => q.classification === 'dewasa');
-      const needsDewasaUpdate =
-        dewasaQuestions.length !== seedFinalMissionQuestionsDewasa.length ||
-        !dewasaQuestions.some((q) => q.id === 'Q1a_DWS') ||
-        !dewasaQuestions.some((q) => q.id === 'Q60a_DWS');
-
-      if (needsDewasaUpdate) {
-        const nonDewasa = questions.filter((q) => q.classification !== 'dewasa');
-        questions = this.sortQuestionsNaturally([...JSON.parse(JSON.stringify(seedFinalMissionQuestionsDewasa)), ...nonDewasa]);
-        this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
-      }
     }
 
     // Always ensure questions are naturally sorted by ID
@@ -5427,6 +5474,7 @@ class DatabaseService {
         }
         questions = this.sortQuestionsNaturally(questions);
         this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+        this.persistFinalMissionMaster('Super Admin', questions).catch(() => {});
         return;
       }
     }
@@ -5439,6 +5487,13 @@ class DatabaseService {
     }
     questions = this.sortQuestionsNaturally(questions);
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
+    this.persistFinalMissionMaster('Super Admin', questions).catch(() => {});
+  }
+
+  public async saveFinalMissionQuestionAsync(question: FinalMissionQuestion, oldId?: string): Promise<void> {
+    this.saveFinalMissionQuestion(question, oldId);
+    const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
+    await this.persistFinalMissionMaster('Super Admin', questions);
   }
 
   /**
@@ -5448,6 +5503,13 @@ class DatabaseService {
     const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
     const updated = this.sortQuestionsNaturally(questions.filter((q) => q.id !== id));
     this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, updated);
+    this.persistFinalMissionMaster('Super Admin', updated).catch(() => {});
+  }
+
+  public async deleteFinalMissionQuestionAsync(id: string): Promise<void> {
+    this.deleteFinalMissionQuestion(id);
+    const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
+    await this.persistFinalMissionMaster('Super Admin', questions);
   }
 
   /**
@@ -5541,7 +5603,8 @@ class DatabaseService {
   public async setFinalMissionQuestionImage(
     questionId: string,
     imageDataUrl: string,
-    imageFileName?: string
+    imageFileName?: string,
+    rawCompressedBase64?: string
   ): Promise<boolean> {
     if (!questionId || !imageDataUrl) return false;
 
@@ -5552,6 +5615,8 @@ class DatabaseService {
       finalImageUrl = `${cleanPath}?t=${Date.now()}`;
     }
 
+    const base64Data = rawCompressedBase64 || (imageDataUrl.startsWith('data:') ? imageDataUrl : '');
+
     const keys = [
       `fm_q_${questionId}`,
       `fm_q_${questionId?.toLowerCase()}`,
@@ -5560,7 +5625,25 @@ class DatabaseService {
       imageFileName ? imageFileName.toLowerCase() : '',
     ].filter(Boolean);
 
-    await saveImageToStore(`fm_q_${questionId}`, finalImageUrl.startsWith('data:') ? finalImageUrl : imageDataUrl, keys);
+    // Save actual base64 data to memory & IndexedDB
+    if (base64Data) {
+      await saveImageToStore(`fm_q_${questionId}`, base64Data, keys);
+      // Also backup to Cloud Firestore 'uploaded_images'
+      try {
+        const cleanKey = `fm_q_${questionId.toLowerCase()}`;
+        saveCloudDoc('uploaded_images', cleanKey, {
+          id: cleanKey,
+          questionId,
+          fileName: imageFileName || `${questionId}.webp`,
+          dataUrl: base64Data,
+          url: finalImageUrl,
+          category: 'final-mission',
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+      } catch {}
+    } else {
+      await saveImageToStore(`fm_q_${questionId}`, finalImageUrl, keys);
+    }
 
     // Update question record
     const questions = this.getStorage<FinalMissionQuestion>(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, []);
@@ -5582,6 +5665,9 @@ class DatabaseService {
       }
 
       target.imageUrl = finalImageUrl;
+      if (base64Data) {
+        (target as any).imageDataUrl = base64Data;
+      }
       if (imageFileName) target.imageFileName = imageFileName;
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
       // Automatically synchronize to server disk and Cloud Firestore
@@ -5603,6 +5689,7 @@ class DatabaseService {
 
     if (target) {
       delete target.imageUrl;
+      delete (target as any).imageDataUrl;
       target.imageFileName = '';
       this.setStorage(STORAGE_KEYS.FINAL_MISSION_QUESTIONS, questions);
       this.persistFinalMissionMaster('Super Admin').catch(() => {});
@@ -5631,34 +5718,39 @@ class DatabaseService {
   }
 
   /**
-   * Retrieve image URL for a question from ImageStore or direct URL
+   * Retrieve image URL for a question from ImageStore, direct URL, or dataUrl.
+   * Never returns phantom paths for un-uploaded files.
    */
   public getFinalMissionQuestionImage(question: FinalMissionQuestion): string {
-    if (question.imageUrl) {
-      const url = question.imageUrl.trim();
-      if (url.startsWith('/') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
-        return url;
-      }
-      return `/images/final-mission/${url}`;
+    // 1. If explicit Base64 dataUrl is stored on the question object
+    if ((question as any).imageDataUrl && typeof (question as any).imageDataUrl === 'string') {
+      const dUrl = (question as any).imageDataUrl.trim();
+      if (dUrl.startsWith('data:')) return dUrl;
     }
 
+    // 2. Lookup in memory & IndexedDB ImageStore first
     const lookupKeys = [
       `fm_q_${question.id}`,
+      `fm_q_${question.id?.toLowerCase()}`,
       question.id,
       question.imageFileName || '',
       question.imageFileName ? question.imageFileName.toLowerCase() : '',
     ].filter(Boolean);
 
     const fromStore = getImageFromStore(lookupKeys);
-    if (fromStore) return fromStore;
+    if (fromStore && (fromStore.startsWith('data:') || fromStore.startsWith('http') || fromStore.startsWith('/'))) {
+      return fromStore;
+    }
 
-    if (question.imageFileName && typeof question.imageFileName === 'string') {
-      const trimmed = question.imageFileName.trim();
-      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/')) {
-        return trimmed;
+    // 3. Direct imageUrl if valid and explicitly set
+    if (question.imageUrl && typeof question.imageUrl === 'string') {
+      const url = question.imageUrl.trim();
+      if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+        return url;
       }
-      const clean = trimmed.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
-      return `/images/final-mission/${clean}`;
+      if (url.startsWith('/images/')) {
+        return url;
+      }
     }
 
     return '';
@@ -5858,12 +5950,15 @@ class DatabaseService {
    * Get Final Mission stage access config (unlock all or specific stages, and passing grade)
    */
   public getFinalMissionStageAccess(): FinalMissionStageAccessConfig {
+    if (this.inMemoryStore.has(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS)) {
+      return this.inMemoryStore.get(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS);
+    }
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS);
       if (!raw) return { ...DEFAULT_FINAL_MISSION_STAGE_ACCESS };
       const parsed = JSON.parse(raw);
       const passingGrade = typeof parsed.passingGrade === 'number' ? parsed.passingGrade : 80;
-      return {
+      const res: FinalMissionStageAccessConfig = {
         unlockAll: !!parsed.unlockAll,
         unlockedStages: {
           pemula: true,
@@ -5888,6 +5983,8 @@ class DatabaseService {
           updatedAt: parsed.eventSchedule.updatedAt,
         } : { ...DEFAULT_FINAL_MISSION_STAGE_ACCESS.eventSchedule! },
       };
+      this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, res);
+      return res;
     } catch {
       return { ...DEFAULT_FINAL_MISSION_STAGE_ACCESS };
     }
@@ -5914,9 +6011,19 @@ class DatabaseService {
         master: config.stagePassingGrades?.master !== undefined ? config.stagePassingGrades.master : (current.stagePassingGrades?.master ?? passingGrade),
       },
       eventSchedule: config.eventSchedule !== undefined ? config.eventSchedule : current.eventSchedule,
+      updatedAt: new Date().toISOString(),
     };
     try {
+      this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, updated);
       localStorage.setItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, JSON.stringify(updated));
+      saveCloudDoc('settings', 'final_mission_stage_access', updated).catch(() => {});
+      if (typeof window !== 'undefined') {
+        fetch('/api/stage-access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error('Failed to save final mission stage access config', err);
     }
@@ -5924,17 +6031,46 @@ class DatabaseService {
     return updated;
   }
 
+  public async saveFinalMissionStageAccessAsync(config: Partial<FinalMissionStageAccessConfig>): Promise<FinalMissionStageAccessConfig> {
+    const updated = this.saveFinalMissionStageAccess(config);
+    if (typeof window !== 'undefined') {
+      try {
+        await Promise.allSettled([
+          fetch('/api/stage-access', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated),
+          }),
+          saveCloudDoc('settings', 'final_mission_stage_access', updated),
+        ]);
+      } catch (e) {
+        console.warn('Async stage access sync notice:', e);
+      }
+    }
+    return updated;
+  }
+
   /**
    * Reset Final Mission stage access config to default
    */
   public resetFinalMissionStageAccess(): FinalMissionStageAccessConfig {
+    const reset = { ...DEFAULT_FINAL_MISSION_STAGE_ACCESS, updatedAt: new Date().toISOString() };
     try {
-      localStorage.removeItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS);
+      this.inMemoryStore.set(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, reset);
+      localStorage.setItem(STORAGE_KEYS.FINAL_MISSION_STAGE_ACCESS, JSON.stringify(reset));
+      saveCloudDoc('settings', 'final_mission_stage_access', reset).catch(() => {});
+      if (typeof window !== 'undefined') {
+        fetch('/api/stage-access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reset),
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error('Failed to reset final mission stage access config', err);
     }
     this.notify();
-    return { ...DEFAULT_FINAL_MISSION_STAGE_ACCESS };
+    return reset;
   }
 
   /**

@@ -566,4 +566,6 @@ export interface FinalMissionStageAccessConfig {
     master?: number; // Batas bawah nilai Tahap 3 (default: 80)
   };
   eventSchedule?: FinalMissionEventSchedule; // Pengaturan jadwal event Main Bareng oleh Admin Sekolah
+  updatedAt?: string;
+  updatedBy?: string;
 }

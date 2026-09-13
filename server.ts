@@ -215,6 +215,90 @@ async function startServer() {
     }
   });
 
+  // Permanently save School Settings & System Identity to server disk
+  app.post('/api/school-settings', async (req: Request, res: Response) => {
+    try {
+      const data = req.body;
+      if (!data || typeof data !== 'object') {
+        return res.status(400).json({ error: 'Data settings tidak valid' });
+      }
+
+      const targetDir = path.join(process.cwd(), 'src', 'data');
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const targetPath = path.join(targetDir, 'customSchoolSettings.json');
+      const payload = {
+        ...data,
+        updatedAt: data.updatedAt || new Date().toISOString(),
+      };
+
+      await fs.promises.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+      console.log(`[School Settings Disk] Sukses menyimpan identitas sekolah & sistem ke ${targetPath}`);
+      return res.json({ success: true, settings: payload });
+    } catch (err: any) {
+      console.error('[School Settings Save Error]', err);
+      return res.status(500).json({ error: err.message || 'Gagal menyimpan pengaturan sekolah ke server disk' });
+    }
+  });
+
+  // Get current School Settings & System Identity from server disk
+  app.get('/api/school-settings', async (_req: Request, res: Response) => {
+    try {
+      const targetPath = path.join(process.cwd(), 'src', 'data', 'customSchoolSettings.json');
+      if (fs.existsSync(targetPath)) {
+        const content = await fs.promises.readFile(targetPath, 'utf-8');
+        return res.json(JSON.parse(content));
+      }
+      return res.json(null);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Permanently save Stage Access & Admin Buttons to server disk
+  app.post('/api/stage-access', async (req: Request, res: Response) => {
+    try {
+      const data = req.body;
+      if (!data || typeof data !== 'object') {
+        return res.status(400).json({ error: 'Data stage access tidak valid' });
+      }
+
+      const targetDir = path.join(process.cwd(), 'src', 'data');
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const targetPath = path.join(targetDir, 'customStageAccess.json');
+      const payload = {
+        ...data,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await fs.promises.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+      console.log(`[Stage Access Disk] Sukses menyimpan akses tahap & tombol admin ke ${targetPath}`);
+      return res.json({ success: true, stageAccess: payload });
+    } catch (err: any) {
+      console.error('[Stage Access Save Error]', err);
+      return res.status(500).json({ error: err.message || 'Gagal menyimpan akses tahap ke server disk' });
+    }
+  });
+
+  // Get current Stage Access & Admin Buttons from server disk
+  app.get('/api/stage-access', async (_req: Request, res: Response) => {
+    try {
+      const targetPath = path.join(process.cwd(), 'src', 'data', 'customStageAccess.json');
+      if (fs.existsSync(targetPath)) {
+        const content = await fs.promises.readFile(targetPath, 'utf-8');
+        return res.json(JSON.parse(content));
+      }
+      return res.json(null);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

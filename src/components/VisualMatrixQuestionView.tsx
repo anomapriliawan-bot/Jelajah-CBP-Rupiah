@@ -2,6 +2,7 @@ import React from 'react';
 import { Check, Eye, HelpCircle, Sparkles, CheckCircle2 } from 'lucide-react';
 import { FinalMissionQuestion, FinalMissionMatrixItem } from '../types';
 import { db } from '../services/db';
+import { SafeImage } from './common/SafeImage';
 
 interface VisualMatrixQuestionViewProps {
   question: FinalMissionQuestion;
@@ -121,11 +122,18 @@ export const VisualMatrixQuestionView: React.FC<VisualMatrixQuestionViewProps> =
               <div className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950/60 p-2 flex items-center justify-center min-h-[140px] max-h-[180px] group">
                 {itemImg ? (
                   <>
-                    <img
+                    <SafeImage
                       src={itemImg}
                       alt={item.label}
+                      lookupKeys={[
+                        `fm_item_${question.id}_${item.id}`,
+                        `fm_item_${item.id}`,
+                        item.id,
+                        item.imageFileName || '',
+                      ]}
+                      showPlaceholderOnMissing={true}
+                      fallbackTitle={item.label}
                       className="max-h-36 w-full object-contain rounded-lg transition-transform duration-200 group-hover:scale-[1.02]"
-                      referrerPolicy="no-referrer"
                     />
                     {onPreviewImage && (
                       <button

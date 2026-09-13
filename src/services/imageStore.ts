@@ -5,6 +5,7 @@ import {
   SVG_EMONEY_KARTU,
   SVG_UANG_LOGAM_RUPIAH,
 } from '../data/q38Assets';
+import { getCloudDoc, getCloudCollection } from './firebase';
 
 /**
  * High-Capacity Persistent Image Store
@@ -314,6 +315,108 @@ export function getImageFromStore(keys: string | string[]): string {
   }
 
   return '';
+}
+
+/**
+ * Synchronously checks if an image is readily available in memory or localStorage
+ */
+export function isImageAvailable(keys: string | string[]): boolean {
+  return Boolean(getImageFromStore(keys));
+}
+
+/**
+ * Asynchronously retrieve an image, checking Memory Cache -> IndexedDB -> Cloud Firestore (uploaded_images).
+ * If found in Cloud Firestore, it primes both the Memory Cache and IndexedDB so subsequent loads are instant.
+ */
+export async function getImageWithCloudFallback(keys: string | string[]): Promise<string> {
+  // 1. Check sync memory & localStorage first
+  const syncResult = getImageFromStore(keys);
+  if (syncResult && (syncResult.startsWith('data:') || syncResult.startsWith('http') || syncResult.startsWith('/'))) {
+    return syncResult;
+  }
+
+  const keyList = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
+  if (keyList.length === 0) return '';
+
+  // 2. Check IndexedDB directly if memory was empty
+  try {
+    const idb = await getIndexedDB();
+    if (idb) {
+      const tx = idb.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      for (const k of keyList) {
+        const res: any = await new Promise((resolve) => {
+          const req = store.get(k);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+        });
+        if (res && res.dataUrl) {
+          inMemoryImageCache.set(k, res.dataUrl);
+          return res.dataUrl;
+        }
+      }
+    }
+  } catch {
+    // continue to cloud
+  }
+
+  // 3. Fallback: Query Cloud Firestore 'uploaded_images'
+  try {
+    for (const rawKey of keyList) {
+      const cleanKey = rawKey.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      const cloudDoc = await getCloudDoc('uploaded_images', cleanKey);
+      if (cloudDoc && (cloudDoc.dataUrl || cloudDoc.url)) {
+        const foundUrl = cloudDoc.dataUrl || cloudDoc.url;
+        // Cache to memory and IndexedDB for zero latency next time
+        saveImageToStore(rawKey, foundUrl, keyList);
+        return foundUrl;
+      }
+    }
+  } catch (err) {
+    // Ignore offline or quota limits
+  }
+
+  return '';
+}
+
+let hasSyncedCloudImages = false;
+
+/**
+ * Pre-cache all uploaded images from Cloud Firestore into in-memory store and IndexedDB.
+ * Ensures student devices immediately have all teacher/admin uploaded images ready.
+ */
+export async function syncUploadedImagesFromCloud(): Promise<number> {
+  if (typeof window === 'undefined' || hasSyncedCloudImages) return 0;
+  try {
+    const items = await getCloudCollection<any>('uploaded_images');
+    if (items && Array.isArray(items) && items.length > 0) {
+      let count = 0;
+      for (const item of items) {
+        const url = item.dataUrl || item.url;
+        if (!url) continue;
+        const keys = [
+          item.id,
+          item.id?.toLowerCase(),
+          item.fileName,
+          item.fileName?.toLowerCase(),
+          item.questionId ? `fm_q_${item.questionId}` : '',
+          item.questionId ? `fm_q_${item.questionId.toLowerCase()}` : '',
+          item.questionId,
+          item.lessonId ? `lesson_${item.lessonId}` : '',
+          item.lessonId,
+        ].filter(Boolean);
+
+        keys.forEach((k) => inMemoryImageCache.set(k, url));
+        count++;
+      }
+      hasSyncedCloudImages = true;
+      console.info(`[ImageStore] Synced ${count} images from Cloud Firestore to inMemoryImageCache!`);
+      return count;
+    }
+  } catch (err) {
+    console.warn('[ImageStore] Cloud images sync notice (offline or quota reached):', err);
+  }
+  return 0;
 }
 
 /**

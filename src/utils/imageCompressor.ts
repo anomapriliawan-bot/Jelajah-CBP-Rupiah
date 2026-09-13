@@ -179,5 +179,142 @@ export async function compressImageFile(
   maxDimension = 860,
   quality = 0.76
 ): Promise<CompressionResult> {
-  return compressLogoImage(file, maxDimension);
+  const originalSizeKb = Math.round(file.size / 1024);
+
+  // SVG files are vector, read as-is
+  if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+    return compressLogoImage(file, maxDimension);
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+
+  return new Promise((resolve) => {
+    const img = new Image();
+
+    const cleanup = () => {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        // ignore
+      }
+    };
+
+    img.onerror = () => {
+      cleanup();
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const fallbackUrl = (ev.target?.result as string) || '';
+        resolve({
+          dataUrl: fallbackUrl,
+          originalSizeKb,
+          compressedSizeKb: Math.round(fallbackUrl.length / 1024),
+          width: 400,
+          height: 400,
+        });
+      };
+      reader.onerror = () => {
+        resolve({
+          dataUrl: '',
+          originalSizeKb,
+          compressedSizeKb: 0,
+          width: 0,
+          height: 0,
+        });
+      };
+      reader.readAsDataURL(file);
+    };
+
+    img.onload = () => {
+      try {
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+
+        if (!width || !height) {
+          width = maxDimension;
+          height = maxDimension;
+        }
+
+        // Maintain aspect ratio
+        if (width > height) {
+          if (width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        width = Math.max(1, width);
+        height = Math.max(1, height);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d', { alpha: true });
+        if (!ctx) {
+          cleanup();
+          resolve({
+            dataUrl: '',
+            originalSizeKb,
+            compressedSizeKb: 0,
+            width,
+            height,
+          });
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Try WebP first for optimal balance of quality and microscopic file size
+        let compressedDataUrl = '';
+        try {
+          compressedDataUrl = canvas.toDataURL('image/webp', quality);
+        } catch {
+          // ignore
+        }
+
+        // Fallback to JPEG if browser doesn't support WebP export
+        if (!compressedDataUrl || !compressedDataUrl.startsWith('data:image/webp')) {
+          try {
+            compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          } catch {
+            compressedDataUrl = canvas.toDataURL('image/png');
+          }
+        }
+
+        cleanup();
+
+        const base64Length = compressedDataUrl.length - (compressedDataUrl.indexOf(',') + 1);
+        const compressedSizeKb = Math.round((base64Length * 3) / 4 / 1024);
+
+        resolve({
+          dataUrl: compressedDataUrl,
+          originalSizeKb,
+          compressedSizeKb,
+          width,
+          height,
+        });
+      } catch (err) {
+        cleanup();
+        console.error('Error compressing image:', err);
+        resolve({
+          dataUrl: '',
+          originalSizeKb,
+          compressedSizeKb: 0,
+          width: 0,
+          height: 0,
+        });
+      }
+    };
+
+    img.src = objectUrl;
+  });
 }
+

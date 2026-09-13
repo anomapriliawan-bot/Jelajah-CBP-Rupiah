@@ -249,6 +249,20 @@ export async function saveCloudDoc(collectionName: string, docId: string, data: 
   }
 }
 
+export async function getCloudDoc<T = any>(collectionName: string, docId: string): Promise<T | null> {
+  try {
+    const docRef = doc(firestore, collectionName, String(docId));
+    const snap = await promiseWithTimeout(getDoc(docRef), 4000, `Timeout membaca ${collectionName}/${docId}`);
+    if (snap.exists()) {
+      return snap.data() as T;
+    }
+    return null;
+  } catch (err: any) {
+    // Graceful fallback if offline or quota exceeded
+    return null;
+  }
+}
+
 /**
  * Delete single document from Firestore
  */

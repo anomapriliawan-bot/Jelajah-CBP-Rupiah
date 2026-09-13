@@ -53,6 +53,7 @@ import {
   parseMatrixQuestionOptions,
 } from '../../components/MatrixQuestionView';
 import { VisualMatrixQuestionView } from '../../components/VisualMatrixQuestionView';
+import { SafeImage } from '../../components/common/SafeImage';
 import { sounds } from '../../utils/audio';
 
 interface FinalMissionPageProps {
@@ -1367,14 +1368,21 @@ export const FinalMissionPage: React.FC<FinalMissionPageProps> = ({
                 {currentQ.question}
               </h2>
 
-              {/* Question Image (only rendered if image is present; collapses cleanly with 0 space if absent) */}
+              {/* Question Image (safely rendered; collapses cleanly with 0 space if absent or failed) */}
               {(!currentQ.matrixItems || currentQ.matrixItems.length === 0) && Boolean(questionImage) && (
                 <div className="relative rounded-2xl overflow-hidden border border-slate-700 bg-slate-900/80 p-2 flex flex-col items-center justify-center group">
-                  <img
+                  <SafeImage
                     src={questionImage}
                     alt={currentQ.imageFileName || 'Gambar Soal'}
+                    lookupKeys={[
+                      `fm_q_${currentQ.id}`,
+                      `fm_q_${currentQ.id?.toLowerCase()}`,
+                      currentQ.id,
+                      currentQ.imageFileName || '',
+                      currentQ.imageFileName ? currentQ.imageFileName.toLowerCase() : '',
+                    ]}
+                    hideOnError={true}
                     className="max-h-72 w-auto object-contain rounded-xl transition-transform group-hover:scale-[1.01]"
-                    referrerPolicy="no-referrer"
                   />
                   <button
                     onClick={() => setLightboxImage(questionImage)}

@@ -81,6 +81,8 @@ import {
   parseMatrixQuestionOptions,
 } from '../../components/MatrixQuestionView';
 import { VisualMatrixQuestionView } from '../../components/VisualMatrixQuestionView';
+import { SafeImage } from '../../components/common/SafeImage';
+import { compressImageFile } from '../../utils/imageCompressor';
 import { uploadDataUrlToServer } from '../../services/uploadService';
 
 interface AdminFinalMissionViewProps {
@@ -401,18 +403,20 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     if (!pendingSingleImage) return;
     const { file, questionId } = pendingSingleImage;
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
+    try {
+      // High-efficiency adaptive compression (converts huge photos to tiny WebP/JPEG ~35KB)
+      const compressed = await compressImageFile(file, 860, 0.76);
+      const base64 = compressed.dataUrl;
+
       // Upload physical file to server disk (/public/images/final-mission/) with metadata
       const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission', { questionId });
       const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
 
-      await db.setFinalMissionQuestionImage(questionId, savedUrl, file.name);
+      await db.setFinalMissionQuestionImage(questionId, savedUrl, file.name, base64);
       await db.persistFinalMissionMaster('Super Admin');
 
       sounds.playFanfare();
-      const successMsg = `Gambar "${file.name}" untuk butir soal ${questionId} berhasil diunggah, disimpan di disk server, dan disinkronkan ke Cloud Firestore!`;
+      const successMsg = `Gambar "${file.name}" untuk butir soal ${questionId} berhasil diunggah, dikompresi, disimpan di disk server, dan disinkronkan ke Cloud Firestore!`;
       showToast(`✨ ${successMsg}`);
       setUploadSuccessDialogMsg(successMsg);
       refreshData();
@@ -424,12 +428,14 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
         });
       }
       setPendingSingleImage(null);
-    };
-    reader.readAsDataURL(file);
+    } catch (err: any) {
+      console.error('Upload single image failed:', err);
+      showToast('Gagal memproses gambar: ' + (err?.message || 'Error'), 'error');
+    }
   };
 
   // Matrix Item Image Selection Handler (for multi-image questions like Q38)
-  const handleMatrixItemImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMatrixItemImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !uploadTargetMatrixItemId || !selectedQuestion) return;
 
@@ -439,9 +445,10 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     }
 
     const itemId = uploadTargetMatrixItemId;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
+    try {
+      const compressed = await compressImageFile(file, 860, 0.76);
+      const base64 = compressed.dataUrl;
+
       const serverRes = await uploadDataUrlToServer(file.name, base64, 'final-mission', {
         questionId: selectedQuestion.id,
         matrixItemId: itemId,
@@ -470,8 +477,9 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
       }
       sounds.playPop();
       showToast(`Gambar "${file.name}" untuk item berhasil disimpan permanen ke server & cloud.`);
-    };
-    reader.readAsDataURL(file);
+    } catch (err: any) {
+      showToast('Gagal memproses gambar: ' + (err?.message || 'Error'), 'error');
+    }
     e.target.value = '';
     setUploadTargetMatrixItemId(null);
   };
@@ -508,20 +516,18 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
       });
 
       if (matchingQ) {
-        await new Promise<void>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = async () => {
-            const base64 = reader.result as string;
-            const serverRes = await uploadDataUrlToServer(fileName, base64, 'final-mission', {
-              questionId: matchingQ.id,
-            });
-            const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
-            await db.setFinalMissionQuestionImage(matchingQ.id, savedUrl, fileName);
-            matchedCount++;
-            resolve();
-          };
-          reader.readAsDataURL(file);
-        });
+        try {
+          const compressed = await compressImageFile(file, 860, 0.76);
+          const base64 = compressed.dataUrl;
+          const serverRes = await uploadDataUrlToServer(fileName, base64, 'final-mission', {
+            questionId: matchingQ.id,
+          });
+          const savedUrl = serverRes?.success && serverRes?.url ? serverRes.url : base64;
+          await db.setFinalMissionQuestionImage(matchingQ.id, savedUrl, fileName, base64);
+          matchedCount++;
+        } catch (err) {
+          console.warn(`Bulk image processing failed for ${fileName}:`, err);
+        }
       }
     }
 
@@ -571,8 +577,11 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
         selectedClassification
       );
 
+      // Persist permanently to disk and cloud
+      db.persistFinalMissionMaster('Super Admin').catch(() => {});
+
       sounds.playFanfare();
-      const successMsg = `Berhasil mengimpor ${importResult.added} butir soal ke kategori ${CLASSIFICATION_LABELS[selectedClassification]} dari file "${file.name}"!`;
+      const successMsg = `Berhasil mengimpor ${importResult.added} butir soal ke kategori ${CLASSIFICATION_LABELS[selectedClassification]} dari file "${file.name}"! Tersimpan di disk server & Cloud Firestore.`;
       showToast(`✨ ${successMsg}`);
       setUploadSuccessDialogMsg(successMsg);
       refreshData();
@@ -589,7 +598,7 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
     await db.removeFinalMissionQuestionImage(targetId);
     await db.persistFinalMissionMaster('Super Admin');
     sounds.playPop();
-    showToast(`Gambar untuk butir soal ${targetId} berhasil dihapus.`);
+    showToast(`Gambar untuk butir soal ${targetId} berhasil dihapus dari server & cloud.`);
     refreshData();
     if (selectedQuestion && selectedQuestion.id === targetId) {
       setSelectedQuestion({
@@ -686,7 +695,7 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
   };
 
   // Save Single Question from Edit Modal
-  const handleSaveQuestion = (e: React.FormEvent) => {
+  const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedQuestion) return;
 
@@ -695,18 +704,18 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
       return;
     }
 
-    // Mendukung penggantian/rename ID soal secara mulus
-    db.saveFinalMissionQuestion(selectedQuestion, originalEditingId || undefined);
-    showToast(`Soal ${selectedQuestion.id} berhasil disimpan.`);
+    // Mendukung penggantian/rename ID soal secara mulus & sinkronisasi instan ke disk + cloud
+    await db.saveFinalMissionQuestionAsync(selectedQuestion, originalEditingId || undefined);
+    showToast(`Soal ${selectedQuestion.id} (Poin: ${selectedQuestion.points}) berhasil disimpan ke Server & Cloud.`);
     setShowEditModal(false);
     setOriginalEditingId(null);
     refreshData();
   };
 
   // Delete Single Question
-  const handleDeleteQuestion = (id: string) => {
-    db.deleteFinalMissionQuestion(id);
-    showToast(`Soal ${id} telah dihapus.`, 'info');
+  const handleDeleteQuestion = async (id: string) => {
+    await db.deleteFinalMissionQuestionAsync(id);
+    showToast(`Soal ${id} telah dihapus dari Server & Cloud.`, 'info');
     refreshData();
     setDeleteTargetId(null);
   };
@@ -1455,10 +1464,16 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                               {q.matrixItems.slice(0, 3).map((item, i) => {
                                 const itemImg = db.getFinalMissionMatrixItemImage(q.id, item) || item.imageUrl || '';
                                 return itemImg ? (
-                                  <img
+                                  <SafeImage
                                     key={i}
                                     src={itemImg}
                                     alt={item.label}
+                                    lookupKeys={[
+                                      `fm_item_${q.id}_${item.id}`,
+                                      `fm_item_${item.id}`,
+                                      item.id,
+                                      item.imageFileName || '',
+                                    ]}
                                     className="inline-block h-7 w-7 rounded-lg ring-1 ring-slate-300 object-contain bg-white shrink-0"
                                   />
                                 ) : (
@@ -1483,11 +1498,19 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                               className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0 hover:opacity-80 transition-opacity cursor-pointer shadow-2xs"
                               title="Klik untuk perbesar pratinjau gambar"
                             >
-                              <img
+                              <SafeImage
                                 src={imageSrc}
                                 alt={q.imageFileName || q.id}
+                                lookupKeys={[
+                                  `fm_q_${q.id}`,
+                                  `fm_q_${q.id?.toLowerCase()}`,
+                                  q.id,
+                                  q.imageFileName || '',
+                                  q.imageFileName ? q.imageFileName.toLowerCase() : '',
+                                ]}
+                                showPlaceholderOnMissing={true}
+                                fallbackTitle={q.id}
                                 className="w-full h-full object-contain"
-                                referrerPolicy="no-referrer"
                               />
                             </button>
                             <div className="flex flex-col gap-1 min-w-0">
@@ -1959,11 +1982,17 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                 className="w-12 h-12 rounded-lg overflow-hidden border border-slate-300 bg-white shrink-0 hover:opacity-80 transition-opacity cursor-pointer shadow-xs"
                                 title="Klik untuk perbesar"
                               >
-                                <img
+                                <SafeImage
                                   src={modalImg}
                                   alt={selectedQuestion.imageFileName || selectedQuestion.id}
+                                  lookupKeys={[
+                                    `fm_q_${selectedQuestion.id}`,
+                                    `fm_q_${selectedQuestion.id?.toLowerCase()}`,
+                                    selectedQuestion.id,
+                                    selectedQuestion.imageFileName || '',
+                                  ]}
+                                  showPlaceholderOnMissing={true}
                                   className="w-full h-full object-contain"
-                                  referrerPolicy="no-referrer"
                                 />
                               </button>
                               <div className="flex-1 min-w-0">
@@ -2380,13 +2409,20 @@ export const AdminFinalMissionView: React.FC<AdminFinalMissionViewProps> = ({
                                 <div className="sm:col-span-6 flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200/80">
                                   <div className="w-14 h-14 rounded-lg bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
                                     {itemImg ? (
-                                      <img
+                                      <SafeImage
                                         src={itemImg}
                                         alt={item.label}
+                                        lookupKeys={[
+                                          `fm_item_${selectedQuestion.id}_${item.id}`,
+                                          `fm_item_${item.id}`,
+                                          item.id,
+                                          item.imageFileName || '',
+                                        ]}
+                                        showPlaceholderOnMissing={true}
+                                        fallbackTitle={item.label}
                                         className="w-full h-full object-contain cursor-pointer"
                                         onClick={() => setPreviewImage(itemImg)}
                                         title="Klik untuk perbesar"
-                                        referrerPolicy="no-referrer"
                                       />
                                     ) : (
                                       <ImageIcon className="w-6 h-6 text-slate-300" />
